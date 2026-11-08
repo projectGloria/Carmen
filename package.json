@@ -1,0 +1,99 @@
+{
+  "name": "carmen",
+  "version": "1.0.0",
+  "description": "Fast, automated lossless FLAC audio fetcher and music library organizer for Windows with multi-source cascade scrapers, Vorbis tagging, and M3U8 export.",
+  "main": "main.js",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "test:electron": "npm run build:ui && node scripts/smoke-electron.mjs",
+    "test:packaged": "node scripts/smoke-electron.mjs --packaged",
+    "lint": "eslint .",
+    "benchmark:ui": "node scripts/benchmark-ui.mjs",
+    "benchmark:engine": "node --expose-gc scripts/benchmark-engine.mjs",
+    "qualify:sources": "node scripts/qualify-sources.mjs",
+    "start": "electron .",
+    "dev:ui": "vite",
+    "build:ui": "vite build",
+    "preview:ui": "vite preview",
+    "dist:win": "npm run icons && npm run build:ui && electron-builder --win",
+    "dist:portable": "npm run icons && npm run build:ui && electron-builder --win portable",
+    "pack": "npm run icons && npm run build:ui && electron-builder --dir",
+    "icons": "node scripts/make-icon.mjs"
+  },
+  "keywords": [
+    "audio-downloader",
+    "deezer",
+    "desktop-app",
+    "electron",
+    "flac",
+    "lossless-audio",
+    "metadata-tagger",
+    "music-downloader",
+    "qobuz",
+    "react",
+    "spotify",
+    "tidal",
+    "windows"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.1.1",
+    "electron": "^44.0.0",
+    "electron-builder": "^26.15.3",
+    "eslint": "^9.39.0",
+    "eslint-plugin-react": "^7.37.5",
+    "globals": "^17.12.0",
+    "simple-icons": "^16.30.0",
+    "vite": "^8.2.2"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "build": {
+    "appId": "com.projectgloria.carmen",
+    "productName": "Carmen",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "src/engine/library.mjs",
+      "src/engine/m3u8.mjs",
+      "src/engine/profile-output.mjs",
+      "src/engine/profile-paths.mjs",
+      "src/engine/flac-identity.mjs",
+      "src/engine/flac-artwork.mjs",
+      "src/engine/providers.mjs",
+      "src/engine/resource-cache.mjs",
+      "src/engine/catalog-http.mjs",
+      "src/engine/public-catalog.mjs",
+      "src/engine/matching.mjs",
+      "src/engine/source-response.cjs",
+      "dist/**/*",
+      "build/icon.png",
+      "build/tray.png",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "artifactName": "${productName}-${version}-Setup.${ext}",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Carmen"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-Portable.${ext}"
+    }
+  }
+}

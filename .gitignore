@@ -1,0 +1,21 @@
+# Build output
+dist/
+release/
+node_modules/
+
+# Runtime data.
+#
+# DATA_ROOT in main.js is the app directory during development (an asar is
+# read-only, so a packaged build writes under userData instead), which means a
+# dev run writes all of this into the project. None of it is source: it holds
+# the scrape cache, the queue, the download manifest, past searches and
+# partially-transferred files.
+state/
+logs/
+
+# A copy of an old Electron userData directory, cookies and all.
+carmenBAK/
+
+# OS noise
+Thumbs.db
+.DS_Store

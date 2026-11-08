@@ -1,0 +1,295 @@
+import { memo, useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import { getController, isElectron, ipc } from '../engine.js';
+import { serviceLabel } from '../../engine/status.mjs';
+import { displayedService } from '../../engine/source-display.mjs';
+import SourceIcon from './SourceIcon.jsx';
+import Icon from './Icon.jsx';
+
+// Past this, a search reads as slow rather than routine - long enough that
+// most real answers have already come back, short enough to say something
+// before the user starts wondering if the app is frozen.
+const SLOW_AFTER_MS = 45000;
+
+// Which visual weight a status carries. "searching" is deliberately quiet: in a
+// list of two hundred rows, most of them are searching most of the time, and
+// making that state loud turns the whole list into noise.
+//
+// Labels say what the engine is doing, not a generic "Working". The detail
+// column next to the pill carries the last source's verdict ("Qobuz found it but
+// could not supply the audio"), and under a "Working" pill that read as a
+// contradiction; under "Searching" it reads as the reason the search goes on.
+const TONE = {
+  queued:      { pill: '',            label: 'Queued' },
+  paused:      { pill: 'paused-tone', label: 'Paused' },
+  searching:   { pill: 'accent live', label: 'Searching' },
+  fetching:    { pill: 'accent live', label: 'Fetching' },
+  // Fetched and handed to the network, nothing moving yet. Given its own tone
+  // rather than folded into "Downloading": the whole point is being able to see
+  // at a glance how much work is already banked ahead of the transfers.
+  ready:       { pill: 'info',        label: 'Ready' },
+  downloading: { pill: 'info live',   label: 'Downloading' },
+  completed:   { pill: 'ok',          label: 'Done' },
+  skipped:     { pill: 'warn',        label: 'Missing' },
+  cancelled:   { pill: '',            label: 'Cancelled' },
+};
+
+// Records are mutable, so memoizing only their object identity freezes status.
+// Capture the small visible-row snapshot before passing it through memo.
+export default function TrackRow(props) {
+  const rec = props.rec;
+  const { item = {}, step, result } = rec;
+  const rowState = `${rec.status || ''}|${rec.statusText || ''}|${rec.priority ? 1 : 0}|${rec.attemptStartedAt || 0}|${rec.transferService || ''}|${step?.i || 0}/${step?.of || 0}:${step?.service || ''}|${result?.service || ''}:${result?.via || ''}:${result?.file || ''}:${result?.savePath || ''}:${result?.sourceUrl || ''}|${rec.reused ? 1 : 0}|${item.id || ''}:${item.title || ''}:${item.artist || ''}:${item.album || ''}:${item.image || ''}:${item.groupName || ''}`;
+  return <MemoRow {...props} rowState={rowState} />;
+}
+const MemoRow = memo(TrackRowContent, (before, after) => before.rowState === after.rowState
+  && before.queueIndex === after.queueIndex && before.draggableQueue === after.draggableQueue
+  && before.isDragTarget === after.isDragTarget && before.onToast === after.onToast
+  && before.onDragStart === after.onDragStart && before.onDragOver === after.onDragOver && before.onDrop === after.onDrop);
+
+function TrackRowContent({
+  rec,
+  queueIndex = null,
+  draggableQueue = false,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  isDragTarget = false,
+  onToast,
+}) {
+  const store = getController();
+  const recordId = rec.trackKey || rec.item.id;
+  useSyncExternalStore(
+    useCallback(fn => store?.subscribeItem ? store.subscribeItem(recordId, fn) : () => {}, [store, recordId]),
+    useCallback(() => store?.getItemSnapshot?.(recordId) || '', [store, recordId])
+  );
+  const { item, status, statusText } = rec;
+  const id = rec.id || item.id;
+  const tone = TONE[status] || TONE.queued;
+  const busy = status === 'searching' || status === 'fetching' || status === 'ready' || status === 'downloading';
+  const isQueued = status === 'queued';
+  const isPaused = status === 'paused';
+  const canPause = busy || isQueued;
+  const canResume = isPaused || status === 'cancelled' || status === 'skipped';
+  const canPrioritize = (isQueued || isPaused) && (!rec.priority || (queueIndex != null && queueIndex > 1));
+  const title = item.title || item.name;
+
+  const pct = typeof rec.progress === 'number' ? Math.round(rec.progress * 100) : null;
+  const elapsed = useElapsed(status === 'searching' || status === 'fetching' ? rec.attemptStartedAt : null);
+  const slow = elapsed !== null && elapsed >= SLOW_AFTER_MS;
+  useRowProgress(rec);
+
+  const detailClass =
+    status === 'skipped' ? 'detail warnc'
+    : status === 'cancelled' ? 'detail err'
+    : 'detail';
+
+  const openFolder = () => {
+    if (!isElectron) return;
+    ipc.invoke('open-item-folder', {
+      savePath: rec.result && rec.result.savePath,
+      folderName: item.folderName,
+    }).catch(() => {});
+  };
+
+  const rowClasses = [
+    'row',
+    status === 'completed' ? 'done' : '',
+    status === 'skipped' ? 'skipped' : '',
+    isPaused ? 'paused-row' : '',
+    rec.priority && (isQueued || busy) ? 'priority-row' : '',
+    isDragTarget ? 'drag-over' : '',
+  ].filter(Boolean).join(' ');
+
+  return (
+    <div
+      className={rowClasses}
+      draggable={draggableQueue && (isQueued || isPaused)}
+      onDragStart={onDragStart ? (e) => onDragStart(e, id) : undefined}
+      onDragOver={onDragOver ? (e) => onDragOver(e, id) : undefined}
+      onDrop={onDrop ? (e) => onDrop(e, id) : undefined}
+      onDoubleClick={status === 'completed' ? openFolder : undefined}
+    >
+      <div className="art-wrap">
+        {item.image
+          ? <img className="art" src={item.image} alt="" loading="lazy" referrerPolicy="no-referrer" />
+          : <div className="art" aria-hidden="true"><Icon name="music" size={14} /></div>}
+        {queueIndex !== null && (isQueued || busy) && (
+          <span className="queue-rank" title={`Queue position #${queueIndex}`}>{queueIndex}</span>
+        )}
+      </div>
+
+      <div className="title" title={title}>
+        {rec.priority && (isQueued || busy) && <Icon name="zap" size={12} label="Prioritized" />}
+        <span className="truncate">{title}</span>
+      </div>
+      <div className="artist truncate" title={item.artist}>{item.artist}</div>
+
+      {/* Which source is being asked, and what the last one actually said -
+          not just "Fetching…". */}
+      <div className={detailClass}>
+        <SourceTrail rec={rec} />
+        <span className="truncate" title={statusText}>{statusText}</span>
+        {/* Below SLOW_AFTER_MS this is silent - most searches are quick and a
+            timer on every row would just be noise. Past it, it is the one
+            thing that tells "still working" apart from "looks frozen". */}
+        {slow && <span className="elapsed" title="How long the current source has been asked">{formatElapsed(elapsed)}</span>}
+      </div>
+
+      <div className="state">
+        {status === 'downloading' || status === 'ready' ? (
+          <div className="row-progress" title={status === 'ready' ? 'Fetched, waiting for the network' : 'Downloading'}>
+            {/* A ready track gets a hatched empty bar, not the indeterminate
+                sweep: the sweep means "moving, length unknown", and this one
+                is not moving at all yet. */}
+            <div className={`progress ${status === 'ready' ? 'waiting' : pct === null ? 'indeterminate' : ''}`}>
+              <i style={{ width: status === 'ready' ? 0 : pct === null ? undefined : `${pct}%` }} />
+            </div>
+            <span className="pct">{status === 'ready' ? '—' : pct === null ? '' : `${pct}%`}</span>
+          </div>
+        ) : (
+          <span
+            className={`pill ${tone.pill} ${slow ? 'slow' : ''}`}
+            title={rec.reused && status === 'completed' ? 'Already downloaded for another playlist' : undefined}
+          >
+            {busy && <span className="dot" />}
+            {rec.reused && status === 'completed' ? 'Done (reused)' : tone.label}
+          </span>
+        )}
+      </div>
+
+      <div className="actions">
+        {canPause && (
+          <button className="icon-btn" onClick={() => getController().pauseItem?.(id)} title="Pause this track" aria-label="Pause this track">
+            <Icon name="pause" size={13} />
+          </button>
+        )}
+        {canResume && (
+          <button
+            className="icon-btn"
+            onClick={() => getController().resumeItem?.(id)}
+            title={isPaused ? 'Resume this track' : 'Retry this track'}
+            aria-label={isPaused ? 'Resume this track' : 'Retry this track'}
+          >
+            <Icon name={isPaused ? 'play' : 'retry'} size={13} />
+          </button>
+        )}
+        {canPrioritize && (
+          <button
+            className="icon-btn priority"
+            onClick={() => {
+              getController().downloadNow?.(id);
+              onToast?.(`Moved “${title}” to top of queue.`);
+            }}
+            title="Download now (move to top of queue)"
+            aria-label="Download now"
+          >
+            <Icon name="zap" size={13} />
+          </button>
+        )}
+        {status === 'completed' && isElectron && (
+          <button className="icon-btn" onClick={openFolder} title="Show in folder" aria-label="Show in folder">
+            <Icon name="folder" size={14} />
+          </button>
+        )}
+        {(status === 'queued' || busy) && (
+          <button className="icon-btn danger" onClick={() => getController().cancel(id)} title="Cancel this track" aria-label="Cancel this track">
+            <Icon name="x" size={14} />
+          </button>
+        )}
+        {!busy && status !== 'queued' && (
+          <button
+            className="icon-btn danger"
+            onClick={() => getController().remove(id)}
+            title="Remove from the list (the file, if any, stays)"
+            aria-label="Remove from the list"
+          >
+            <Icon name="trash" size={14} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// One shared 1Hz clock for every elapsed counter on screen. Each row used to
+// own its own setInterval, so N active rows meant N timers firing out of phase
+// and N separate renders a second; now it is one timer and one React batch,
+// and the timer only exists while at least one row is listening.
+const clockListeners = new Set();
+let clockNow = Date.now();
+let clockTimer = null;
+function subscribeClock(listener) {
+  clockListeners.add(listener);
+  if (!clockTimer) {
+    clockNow = Date.now();
+    clockTimer = setInterval(() => {
+      clockNow = Date.now();
+      for (const l of clockListeners) l();
+    }, 1000);
+  }
+  return () => {
+    clockListeners.delete(listener);
+    if (!clockListeners.size) { clearInterval(clockTimer); clockTimer = null; }
+  };
+}
+const getClock = () => clockNow;
+// Rows that are not timing anything subscribe to nothing, so an idle queue of
+// 300 tracks keeps no timer alive at all.
+const noSubscribe = () => () => {};
+
+/** Milliseconds since `startedAt`, ticking once a second while it is set. */
+function useElapsed(startedAt) {
+  const now = useSyncExternalStore(startedAt ? subscribeClock : noSubscribe, getClock);
+  // clockNow can be up to a second stale when this row starts timing, which
+  // would show a negative elapsed for one tick.
+  return startedAt ? Math.max(0, now - startedAt) : null;
+}
+
+/**
+ * Re-render this row - and only this row - when its own bytes move.
+ *
+ * Progress ticks used to bump the whole store's version, which re-rendered
+ * every group, every row and the sidebar several times a second for the sake
+ * of the one or two rows actually transferring. The records are mutated in
+ * place, so a memo on `rec` would freeze the row entirely; subscribing here
+ * and comparing against the last seen value keeps idle rows asleep while a
+ * downloading row stays live. Status changes still arrive through the parent,
+ * which re-renders on the status version as before.
+ */
+function useRowProgress(rec) {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const store = getController();
+    if (!['ready', 'downloading'].includes(rec.status) || !store || typeof store.subscribeProgress !== 'function') return undefined;
+    let lastProgress = rec.progress;
+    let lastBytes = rec.receivedBytes;
+    return store.subscribeProgress(() => {
+      if (rec.progress !== lastProgress || rec.receivedBytes !== lastBytes) {
+        lastProgress = rec.progress;
+        lastBytes = rec.receivedBytes;
+        force((n) => n + 1);
+      }
+    });
+  }, [rec, rec.status]);
+}
+
+function formatElapsed(ms) {
+  const s = Math.floor(ms / 1000);
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+function SourceTrail({ rec }) {
+  const service = displayedService(rec);
+  if (!service) return null;
+  const label = rec.status === 'completed' ? 'Downloaded from'
+    : rec.status === 'downloading' ? 'Downloading from'
+    : rec.status === 'ready' ? 'Fetched from'
+    : 'Searching';
+  return (
+    <span className="trail">
+      <span className={rec.status === 'completed' ? 'hop ok' : 'hop now'} title={label + ' ' + serviceLabel(service)}>
+        <SourceIcon service={service} size={16} />
+      </span>
+    </span>
+  );
+}
