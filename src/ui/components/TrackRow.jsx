@@ -111,7 +111,7 @@ function TrackRowContent({
     >
       <div className="art-wrap">
         {item.image
-          ? <img className="art" src={item.image} alt="" loading="lazy" referrerPolicy="no-referrer" />
+          ? <img className="art" src={item.image} alt={title ? `${title} album art` : 'Album art'} loading="lazy" referrerPolicy="no-referrer" />
           : <div className="art" aria-hidden="true"><Icon name="music" size={14} /></div>}
         {queueIndex !== null && (isQueued || busy) && (
           <span className="queue-rank" title={`Queue position #${queueIndex}`}>{queueIndex}</span>

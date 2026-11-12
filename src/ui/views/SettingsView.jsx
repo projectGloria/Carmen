@@ -109,6 +109,10 @@ export default function SettingsView({ config, setConfig, onToast, throttleOff =
 
   const toggleService = (sv) => {
     const cur = local.fallbackServices || ['amazon'];
+    if (cur.includes(sv) && cur.length === 1) {
+      onToast?.('At least one download source must be enabled.', 'warn');
+      return;
+    }
     const next = cur.includes(sv) ? cur.filter((s) => s !== sv) : [...cur, sv];
     patch({ fallbackServices: next });
   };

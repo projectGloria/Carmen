@@ -520,6 +520,7 @@ export class Controller {
     const preempt = !!opts.preempt;
     const startPaused = !!opts.paused;
     const fresh = [];
+    const prioritizedEntries = [];
     let duplicates = 0;
     for (const item of list) {
       if (this.items.has(item.id)) continue; // never queue the same track twice
@@ -552,13 +553,15 @@ export class Controller {
         prioritizedAt: priority ? Date.now() : null,
         tried: [], plan: null, step: null, result: null,
       };
-      if (priority && this.items.size > 0) {
-        const entries = [[item.id, rec], ...this.items.entries()];
-        this.items = new Map(entries);
+      if (priority) {
+        prioritizedEntries.push([item.id, rec]);
       } else {
         this.items.set(item.id, rec);
       }
       fresh.push(item);
+    }
+    if (prioritizedEntries.length > 0) {
+      this.items = new Map([...prioritizedEntries, ...this.items.entries()]);
     }
     this.lastAdd = { added: fresh.length, duplicates };
     if (fresh.length) {

@@ -95,9 +95,18 @@ export async function embedArtwork(path, { bytes, mime = 'image/png', width, hei
     await copy(audioAt, (await source.stat()).size - audioAt);
     await target.sync(); await target.close();
     await source.close();
-    await rename(temporary, path);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        await rename(temporary, path);
+        break;
+      } catch (err) {
+        if (attempt === 4 || !['EBUSY', 'EPERM', 'EACCES'].includes(err.code)) throw err;
+        await new Promise((r) => setTimeout(r, 40 * (attempt + 1)));
+      }
+    }
   } finally {
-    await target?.close(); await source.close();
+    await target?.close().catch(() => {});
+    await source?.close().catch(() => {});
     await unlink(temporary).catch(() => {});
   }
 }

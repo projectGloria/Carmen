@@ -67,6 +67,7 @@
       "src/engine/profile-paths.mjs",
       "src/engine/flac-identity.mjs",
       "src/engine/flac-artwork.mjs",
+      "src/engine/network-guard.mjs",
       "src/engine/providers.mjs",
       "src/engine/resource-cache.mjs",
       "src/engine/catalog-http.mjs",

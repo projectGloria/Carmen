@@ -1070,15 +1070,6 @@ async function validateFlacCached(file, bytes = 0) {
 }
 
 const mediaTransfers = new Map();
-ipcMain.on('download-cancel-item', (event, itemId) => {
-  const finalizing = finalizingItems.get(itemId);
-  if (finalizing) finalizing.cancelled = true;
-  for (const [id, ctx] of pendingContexts) if (ctx.itemId === itemId) pendingContexts.delete(id);
-  mediaTransfers.get(itemId)?.abort();
-  for (const rec of liveItems) {
-    if (rec.itemId === itemId) { try { rec.item.cancel(); } catch {} }
-  }
-});
 
 
 
@@ -1840,14 +1831,6 @@ ipcMain.handle('provider-download', async (_event, payload) => {
   } finally { pendingProviderStarts.delete(payload.itemId); }
 });
 
-ipcMain.on('download-cancel-item', (_event, itemId) => {
-  const starting = pendingProviderStarts.get(itemId);
-  if (starting) starting.cancelled = true;
-  for (const [url, entry] of providerDownloads) if (entry.context.itemId === itemId) {
-    clearTimeout(entry.timer); providerDownloads.delete(url);
-  }
-});
-
 // Downloads that do not originate in a worker webview (a direct link opened in
 // the main window) still need somewhere to look.
 let fallbackContext = null;
@@ -1900,11 +1883,18 @@ ipcMain.handle('get-download-path', () => {
 // from scraped content. An earlier version handed it straight to net.request -
 // no protocol or private-host check, no response cap, and no timeout, so a
 // connection that never answered left the renderer's promise pending forever.
+let networkGuardModule = null;
+async function getNetworkGuard() {
+  if (!networkGuardModule) networkGuardModule = await import('./src/engine/network-guard.mjs');
+  return networkGuardModule;
+}
+
 ipcMain.handle('download-artwork', async (event, { url, suggestedName }) => {
   if (!url) return { ok: false, error: 'No artwork URL.' };
   let u;
   try { u = new URL(String(url)); } catch (e) { return { ok: false, error: 'Not a valid artwork URL.' }; }
-  if (u.protocol !== 'https:' || PRIVATE_HOST.test(u.hostname)) {
+  const { isSafePublicHost } = await getNetworkGuard();
+  if (u.protocol !== 'https:' || !(await isSafePublicHost(u.hostname))) {
     logEvent('artwork.blocked', { host: u.hostname, protocol: u.protocol, via: 'save-as' });
     return { ok: false, error: 'That artwork URL is not allowed.' };
   }
@@ -1948,13 +1938,35 @@ function showItemOrFolder(payload) {
 }
 
 ipcMain.handle('open-item-folder', (event, payload) => showItemOrFolder(payload));
-ipcMain.on('open-item-folder', (event, payload) => showItemOrFolder(payload));
 
 ipcMain.handle('open-path', async (event, targetPath) => {
   try {
     if (!targetPath || typeof targetPath !== 'string') return { ok: false, error: 'Invalid path' };
     const resolved = path.resolve(targetPath);
-    if (!fs.existsSync(resolved)) return { ok: false, error: 'That path does not exist.' };
+    const stat = await fs.promises.stat(resolved).catch(() => null);
+    if (!stat) return { ok: false, error: 'That path does not exist.' };
+    if (!stat.isDirectory()) return { ok: false, error: 'Target path must be a directory.' };
+
+    const norm = (p) => (process.platform === 'win32' ? p.toLowerCase() : p);
+    const isUnder = (dir, parent) => {
+      const nd = norm(dir);
+      const np = norm(parent);
+      return nd === np || nd.startsWith(np.endsWith(path.sep) ? np : np + path.sep);
+    };
+
+    const allowedRoots = [
+      downloadPath,
+      LOG_DIR,
+      DATA_ROOT,
+      app.getPath('downloads'),
+    ].filter(Boolean).map((p) => path.resolve(p));
+
+    const allowed = allowedRoots.some((root) => isUnder(resolved, root));
+    if (!allowed) {
+      logEvent('path.open.rejected', { path: resolved, reason: 'outside-allowed-roots' });
+      return { ok: false, error: 'Path outside allowed directories.' };
+    }
+
     const err = await shell.openPath(resolved);
     if (err) return { ok: false, error: err };
     return { ok: true };
@@ -2089,6 +2101,21 @@ ipcMain.on('downloads-cancel', () => {
 ipcMain.on('downloads-pause', () => setPaused(true));
 ipcMain.on('downloads-resume', () => setPaused(false));
 
+ipcMain.on('download-cancel-item', (_event, itemId) => {
+  const finalizing = finalizingItems.get(itemId);
+  if (finalizing) finalizing.cancelled = true;
+  for (const [id, ctx] of pendingContexts) if (ctx.itemId === itemId) pendingContexts.delete(id);
+  mediaTransfers.get(itemId)?.abort();
+  for (const rec of liveItems) {
+    if (rec.itemId === itemId) { try { rec.item.cancel(); } catch {} }
+  }
+  const starting = pendingProviderStarts.get(itemId);
+  if (starting) starting.cancelled = true;
+  for (const [url, entry] of providerDownloads) if (entry.context.itemId === itemId) {
+    clearTimeout(entry.timer); providerDownloads.delete(url);
+  }
+});
+
 // Fix 4: guarded send helper - the will-download handlers had no
 // mainWindow-alive check, unlike throttleTick's send.
 function toUI(channel, msg) {
@@ -2119,9 +2146,13 @@ async function safeFetchImage(initialUrl, maxBytes = MAX_ARTWORK_BYTES, timeoutM
   try { currentUrl = new URL(String(initialUrl)); } catch (e) {
     throw new Error('Invalid artwork URL');
   }
+  const guard = typeof getNetworkGuard === 'function' ? await getNetworkGuard() : null;
   const maxRedirects = 5;
   for (let hop = 0; hop <= maxRedirects; hop++) {
-    if (currentUrl.protocol !== 'https:' || PRIVATE_HOST.test(currentUrl.hostname)) {
+    const isBlocked = guard
+      ? !(await guard.isSafePublicHost(currentUrl.hostname))
+      : (typeof PRIVATE_HOST !== 'undefined' ? PRIVATE_HOST.test(currentUrl.hostname) : false);
+    if (currentUrl.protocol !== 'https:' || isBlocked) {
       throw new Error(`Insecure or private host blocked: ${currentUrl.hostname}`);
     }
     const res = await net.fetch(currentUrl.href, {
@@ -2232,7 +2263,8 @@ async function ensureDownloadArtwork(file, context) {
   const image = nativeImage.createFromBuffer(buf);
   if (image.isEmpty()) return false;
   const resized = image.resize({ width: Math.min(1000, image.getSize().width) });
-  await embedArtwork(file, { bytes: resized.toPNG(), ...resized.getSize() });
+  const jpegBytes = resized.toJPEG(88);
+  await embedArtwork(file, { bytes: jpegBytes, mime: 'image/jpeg', ...resized.getSize() });
   return hasValidArtwork(file, decode);
 }
 
@@ -2506,7 +2538,15 @@ function handleWillDownload(event, item, webContents) {
             if (savePath !== finalPath) {
               // link is exclusive: an unrelated file created during the transfer
               // must never be overwritten by promotion of our temporary file.
-              await fs.promises.link(savePath, finalPath);
+              try {
+                await fs.promises.link(savePath, finalPath);
+              } catch (err) {
+                if (err.code === 'EXDEV' || err.code === 'ENOTSUP' || err.code === 'EPERM') {
+                  await fs.promises.copyFile(savePath, finalPath, fs.constants.COPYFILE_EXCL);
+                } else {
+                  throw err;
+                }
+              }
               await fs.promises.unlink(savePath);
               liveSavePaths.delete(savePathKey(savePath));
               savePath = finalPath;
@@ -2741,7 +2781,12 @@ function createWindow() {
     if (ok) return;
     event.preventDefault();
     logEvent('window.navigation.blocked', { url: String(url || '').slice(0, 200) });
-    shell.openExternal(url).catch(() => {}); // the user meant to open a link
+    try {
+      const parsed = new URL(url);
+      if (['http:', 'https:'].includes(parsed.protocol)) {
+        shell.openExternal(parsed.href).catch(() => {}); // the user meant to open a web link
+      }
+    } catch { /* Ignore invalid URLs */ }
   });
 
   mainWindow.setMenu(null);
