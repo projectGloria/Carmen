@@ -1,318 +1,207 @@
 <div align="center">
 
-<img src="build/icon.png" alt="Carmen Logo" width="120" height="120" />
+<img src="build/icon.png" alt="Carmen icon" width="112" height="112" />
 
 # Carmen
 
-**Fast, automated lossless FLAC audio fetcher and library organizer for Windows**
-
-*Automating multi-source cascade scrapers into clean, tagged FLAC downloads — powered by Electron, React 19, and Vite.*
+**Automated lossless FLAC audio fetcher and music library organizer for Windows.**
 
 <p>
-  <a href="package.json"><img src="https://img.shields.io/badge/License-ISC-00B074.svg?style=flat-square" alt="License: ISC" /></a>
-  <img src="https://img.shields.io/badge/Platform-Windows%20x64-0078D4.svg?style=flat-square&logo=windows" alt="Platform: Windows x64" />
-  <img src="https://img.shields.io/badge/Electron-44-47848F.svg?style=flat-square&logo=electron" alt="Electron" />
-  <img src="https://img.shields.io/badge/React-19-61DAFB.svg?style=flat-square&logo=react" alt="React 19" />
-  <img src="https://img.shields.io/badge/Vite-8-646CFF.svg?style=flat-square&logo=vite" alt="Vite 8" />
-  <img src="https://img.shields.io/badge/Audio-Lossless%20FLAC-9B51E0.svg?style=flat-square" alt="Audio: Lossless FLAC" />
-  <img src="https://img.shields.io/badge/Tests-320%20Passed-brightgreen.svg?style=flat-square" alt="Tests: 320 Passed" />
-  <img src="https://img.shields.io/badge/Telemetry-Disabled-success.svg?style=flat-square" alt="Telemetry Disabled" />
+  <a href="https://github.com/projectGloria/Carmen/actions/workflows/ci.yml"><img src="https://github.com/projectGloria/Carmen/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-ISC-8b5cf6?style=flat-square" alt="License: ISC" /></a>
+  <img src="https://img.shields.io/badge/Platform-Windows%20x64-0078D4?style=flat-square&logo=windows&logoColor=white" alt="Platform: Windows x64" />
+  <img src="https://img.shields.io/badge/Electron-44-47848F?style=flat-square&logo=electron&logoColor=white" alt="Electron 44" />
+  <img src="https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black" alt="React 19" />
 </p>
 
----
-
 <p>
-  <a href="#-about-carmen">About</a> •
-  <a href="#-key-features">Features</a> •
-  <a href="#-supported-services">Supported Services</a> •
-  <a href="#-how-it-works">How It Works</a> •
-  <a href="#-visual-tour">Visual Tour</a> •
-  <a href="#-installation--usage">Installation &amp; Usage</a> •
-  <a href="#-architecture">Architecture</a> •
-  <a href="#-building-from-source">Building</a> •
-  <a href="#-icon--design-philosophy">Design</a> •
-  <a href="#-reliability--testing">Reliability</a> •
-  <a href="#-license--credits">License</a>
+  <a href="#about">About</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#screenshots">Screenshots</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#installation">Installation</a> ·
+  <a href="#usage">Usage</a> ·
+  <a href="#building-from-source">Building from source</a> ·
+  <a href="#license--credits">License</a>
 </p>
 
 </div>
 
----
+<p align="center">
+  <img src="docs/assets/downloads.png" alt="Carmen Downloads view showing completed, active searching, and queued FLAC tracks with a live sidebar and bottom transport bar" width="880" />
+  <br /><em>Downloads view: live playlist progress, per-track provider status, sidebar worker activity, and global transport bar.</em>
+</p>
 
-## 🎧 About Carmen
+## About
 
-**Carmen** is a desktop audio fetching and cataloging workstation for Windows. It allows you to paste playlist, album, track, or artist profile links from mainstream streaming services and automatically retrieves studio-quality, lossless **FLAC** audio files from high-resolution provider mirrors.
+Carmen is a Windows desktop application built with Electron, React 19, and Vite that turns pasted music links, search queries, and public Spotify profiles into organized, tagged lossless **FLAC** libraries.
 
-By driving scraper cascades (such as Lucida and Monochrome) through isolated, headless `<webview>` browser contexts, Carmen bypasses manual browser searches, matches accurate recording releases, downloads audio via Chromium's native transfer pipeline, tags each file with comprehensive Vorbis comments, embeds high-resolution album artwork, and organizes files into clean directory hierarchies.
+It resolves tracklists from Spotify, Deezer, Tidal, and Qobuz, drives Lucida and Monochrome scraper cascades inside isolated background `<webview>` worker slots, and saves transfers through Chromium's native download manager. Every request runs locally from your machine with no user accounts or external telemetry.
 
-### Core Principles
+## Features
 
-- 🪟 **Tailored Windows Desktop Experience**: Available as both a standard NSIS installer (`Carmen-1.0.0-Setup.exe`) and a standalone portable executable (`Carmen-1.0.0-Portable.exe`), featuring a persistent system tray icon, Windows notifications, audio cues, and taskbar progress reporting.
-- 💎 **Lossless Audio Quality**: Directly retrieves 16-bit / 24-bit lossless FLAC files whenever available, eliminating lossy re-encoding artifacts.
-- 🏷️ **Rich Metadata & Embedded Artwork**: Automatically queries and writes artist, title, album, release year, track number, and ISRC tags directly into FLAC Vorbis comments alongside hi-res embedded covers.
-- 🛡️ **Zero Telemetry & Private**: All requests originate strictly from your local machine. No external telemetry, tracking pings, or cloud user accounts are involved.
-- ⚡ **Resilient Concurrent Engine**: Features a decoupled ESM engine with concurrency controls, speed throttling, automatic transfer resume, and exponential backoff retry mechanisms.
+- **Ordered FLAC source cascade**: Enable and rank download sources (`Qobuz`, `Tidal`, `Deezer`, `Amazon Music`, `Yandex Music`, `Monochrome`). Only lossless FLAC is accepted; if a track is missing or region-locked on one source, Carmen advances to the next.
+- **Unified search, link, and profile ingestion**: Search by text or paste a Spotify, Deezer, Tidal, or Qobuz link into one box, or switch to the **Spotify profile** tab to import every public playlist with sorting and cross-playlist deduplication.
+- **Isolated worker pool and pipelined transfers**: Run 1–6 simultaneous search workers pinned to sandboxed `<webview>` slots, with up to 8 transfers running ahead while workers move on to the next search.
+- **Resilient "Keep trying" retry loop**: Automatically re-attempts missing tracks after the queue finishes (starting every 30 seconds and backing off to 5 minutes), backed by atomic persistence across restarts.
+- **Folder organization, artwork embedding, and M3U8 export**: Organizes playlists and albums into sanitized subfolders (handling reserved Windows filenames), verifies FLAC identity, embeds cover artwork, and exports `.m3u8` playlists.
+- **Desktop controls and diagnostics**: Set a global speed limit (KB/s), pause/resume/prioritize individual tracks or groups, minimize to the Windows system tray, enable optional completion sounds, and export structured session diagnostics reports.
 
----
+## Supported services
 
-## ✨ Key Features
+| Service | Icon | Role | Notes |
+| :--- | :---: | :--- | :--- |
+| **Spotify** | <img src="assets/services/spotify.svg" width="20" height="20" alt="Spotify" /> | Input resolver | Tracks, albums, playlists, and public user profiles |
+| **Deezer** | <img src="assets/services/deezer.svg" width="20" height="20" alt="Deezer" /> | Resolver & FLAC source | Tracks, albums, playlists, artist search, and Lucida FLAC mirror |
+| **Qobuz** | <img src="assets/services/qobuz.svg" width="20" height="20" alt="Qobuz" /> | Resolver & FLAC source | Public track/album/playlist links and Lucida FLAC mirror |
+| **Tidal** | <img src="assets/services/tidal.svg" width="20" height="20" alt="Tidal" /> | Resolver & FLAC source | Public track/album/playlist links and Lucida FLAC mirror |
+| **Amazon Music** | <img src="assets/services/amazon-music.svg" width="20" height="20" alt="Amazon Music" /> | FLAC source | Lossless FLAC mirror via Lucida |
+| **Yandex Music** | <img src="assets/services/yandex.svg" width="20" height="20" alt="Yandex Music" /> | FLAC source | Lossless FLAC mirror via Lucida |
+| **Monochrome** | <img src="src/ui/assets/sources/monochrome.svg" width="20" height="20" alt="Monochrome" /> | FLAC source | Lossless FLAC scraper mirror; supports an optional custom compatible HiFi API URL |
 
-<table>
-  <tr>
-    <td width="50%">
-      <h3>🌊 Intelligent Cascade Fallbacks</h3>
-      <p>Automatically chains download attempts across multiple high-res stores (Qobuz &rarr; Tidal &rarr; Deezer &rarr; Amazon Music &rarr; Yandex &rarr; Monochrome). If a track is unavailable or region-locked on one provider, Carmen seamlessly falls back to the next.</p>
-    </td>
-    <td width="50%">
-      <h3>📁 Smart Organization &amp; M3U8 Export</h3>
-      <p>Automatically organizes downloads into custom folder structures (e.g. <code>%Artist%/%Album%/%Track%.flac</code>) and generates synchronized <code>.m3u8</code> playlist files for music managers and mobile players.</p>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%">
-      <h3>🔁 Resilient "Keep Trying" Engine</h3>
-      <p>Configurable background retry engine with exponential backoff (from 30 seconds up to 5 minutes). Automatically re-attempts missing tracks as mirror availability recovers without stalling active downloads.</p>
-    </td>
-    <td width="50%">
-      <h3>⚡ Isolated Worker Pool</h3>
-      <p>Download searches execute in isolated, sandboxed background webviews with dedicated worker slots. A track remains pinned to its worker slot throughout its entire cascade lifecycle to prevent context bleed.</p>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%">
-      <h3>🔍 Unified Input &amp; Profile Ingestion</h3>
-      <p>Paste any URL or type plain search queries into a single smart input. Ingest full Spotify public profiles and discographies with automatic deduplication across shared playlists.</p>
-    </td>
-    <td width="50%">
-      <h3>🎛️ Bandwidth &amp; Queue Control</h3>
-      <p>Integrated network speed limiter, per-item and batch pause/resume, individual track prioritization, and real-time per-second transfer progress tracking.</p>
-    </td>
-  </tr>
-</table>
+## Screenshots
 
----
+<p align="center">
+  <img src="docs/assets/add-music.png" alt="Add music view showing unified search and link input with Daft Punk songs and artist results" width="880" />
+  <br /><em>Add music: unified search and link bar with song, album, and artist filters, optional target folder, and History / Spotify profile tabs.</em>
+</p>
 
-## 🌐 Supported Services
+<p align="center">
+  <img src="docs/assets/settings.png" alt="Settings view showing Download folder, Simultaneous searches, Transfers running ahead, Speed limit, and Keep trying controls" width="880" />
+  <br /><em>Settings: download folder, worker concurrency, pipelined transfers, bandwidth cap, and automatic retry controls.</em>
+</p>
 
-Carmen bridges input discovery providers with lossless audio download mirrors:
+<p align="center">
+  <img src="docs/assets/sources.png" alt="Settings Sources section showing ordered FLAC source chips and Monochrome custom API input" width="880" />
+  <br /><em>Sources: click to enable and order FLAC providers, or point Monochrome at a self-hosted compatible HiFi API.</em>
+</p>
 
-| Service | Type | Icon | Capabilities |
-| :--- | :---: | :---: | :--- |
-| **Spotify** | Input Resolver | <img src="assets/services/spotify.svg" width="24" height="24" alt="Spotify" /> | Tracks, Albums, Playlists, and complete User Profiles |
-| **Deezer** | Resolver &amp; FLAC Mirror | <img src="assets/services/deezer.svg" width="24" height="24" alt="Deezer" /> | Tracks, Albums, Playlists, Artist discographies &amp; FLAC mirror |
-| **Qobuz** | Audio Provider | <img src="assets/services/qobuz.svg" width="24" height="24" alt="Qobuz" /> | Studio Hi-Res 24-bit lossless FLAC audio mirror |
-| **Tidal** | Audio Provider | <img src="assets/services/tidal.svg" width="24" height="24" alt="Tidal" /> | HiFi Lossless FLAC audio mirror |
-| **Amazon Music** | Audio Provider | <img src="assets/services/amazon-music.svg" width="24" height="24" alt="Amazon Music" /> | HD Lossless FLAC audio mirror |
-| **SoundCloud** | Resolver &amp; Stream | <img src="assets/services/soundcloud.svg" width="24" height="24" alt="SoundCloud" /> | Direct track and set resolver &amp; stream fetching |
-| **Monochrome** | Audio Mirror | <img src="src/ui/assets/sources/monochrome.svg" width="24" height="24" alt="Monochrome" /> | Lossless FLAC scraper mirror fallback |
-| **Yandex Music** | Audio Provider | <img src="assets/services/yandex.svg" width="24" height="24" alt="Yandex" /> | Lossless audio mirror fallback |
-| **YouTube** | Fallback Provider | <img src="src/ui/assets/sources/youtube.png" width="24" height="24" alt="YouTube" /> | Direct audio fallback for rare or unreleased recordings |
-
----
-
-## 🔄 How It Works
+## How it works
 
 ```mermaid
-flowchart TD
-    A["Pasted Link / Query\n(Spotify, Deezer, SoundCloud)"] --> B["Source Link Resolver\n(Metadata, ISRC, Duration, Artwork)"]
-    B --> C["Queue & Task Controller"]
-    
-    subgraph Engine ["Isolated Worker Pool"]
-        C --> D["Worker Slot 1"]
-        C --> E["Worker Slot 2"]
-        C --> F["Worker Slot N"]
-        
-        D --> G["Cascade Strategy"]
-        G --> H["1. Qobuz Hi-Res"]
-        H -- "Missing / Error" --> I["2. Tidal HiFi"]
-        I -- "Missing / Error" --> J["3. Deezer FLAC"]
-        J -- "Missing / Error" --> K["4. Amazon HD"]
-        K -- "Missing / Error" --> L["5. Monochrome / Mirror"]
-    end
-    
-    H & I & J & K & L -- "Hit Confirmed" --> M["Chromium Download Manager\n(Throttled / Resumable Stream)"]
-    M --> N["Metadata & Cover Art Injection\n(FLAC Vorbis Comments + ISRC)"]
-    N --> O["Organized Music Folder\n& Playlist (.m3u8) Export"]
+flowchart LR
+    A["Link, Query, or Profile\n(Spotify, Deezer, Tidal, Qobuz)"] --> B["Source Resolver\nsrc/engine/sources.mjs"]
+    B --> C["Queue Controller\nsrc/engine/controller.mjs"]
+    C --> D["Worker Pool (1-6 slots)\nsrc/engine/pool.mjs"]
+    D --> E["FLAC Cascade\nLucida & Monochrome\n(Qobuz · Tidal · Deezer · Amazon · Yandex)"]
+    E --> F["Chromium Download Manager\nmain.js (throttle & resume)"]
+    F --> G["FLAC Verification, Artwork\n& M3U8 Playlist Export"]
 ```
 
----
+Carmen separates OS integration, download logic, and UI into three layers:
 
-## 📸 Visual Tour
+1. **`main.js`** (Electron main process, CommonJS) owns disk I/O, Chromium `will-download` handling, speed throttling, transfer resume, atomic state persistence, JSONL session logging, diagnostics export, and the Windows system tray.
+2. **`src/engine/`** (pure Node ESM) holds the queue state machine, worker pool, fuzzy title/artist/duration matcher, link resolvers, and self-contained cascade scripts — completely decoupled from React and Electron so the core engine is unit-testable in Node.
+3. **`src/ui/`** (React 19 + Vite) subscribes to the engine controller via `useSyncExternalStore` and falls back to an in-browser mock controller during UI development (`npm run dev:ui`).
 
-### 1. Active Downloads &amp; Live Queue
-Monitor active transfers in real time with per-second byte progress, provider source badges, retry states, and comprehensive batch controls.
+## Installation
 
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│  Downloads (12)  │  4 Active  │  6 Completed  │  1 Missing  │  1 Paused     │
-├──────────────────────────────────────────────────────────────────────────────┤
-│  [Qobuz]  Daft Punk - Giorgio by Moroder                [84% · 3.4 MB/s]    │
-│  [Tidal]  The Weeknd - Blinding Lights                  [42% · 2.8 MB/s]    │
-│  [Deezer] Arctic Monkeys - Do I Wanna Know?             [Queued]            │
-│  [Amazon] Massive Attack - Teardrop                     [Searching...]      │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
+### Requirements
 
-- **Live Transport Bar**: Global Pause, Resume, Clear Finished, and Retry controls.
-- **Granular Inspections**: View active provider, matched release, download rate, and elapsed time per item.
-- **Safety**: Pausing suspends active Chromium transfers without corrupting partial files.
+- **Windows 10 or Windows 11 (x64)**
 
-### 2. Unified Link Ingestion &amp; Profile Ingestion
-Paste URLs or search terms without manually toggling input types:
+### Download
 
-- **Link Mode**: Instantly parses track lists, album sets, and public playlists from Spotify, Deezer, and SoundCloud.
-- **Profile Mode**: Ingests entire Spotify user profiles, mapping every public playlist while deduplicating identical tracks across collections.
-- **History Tab**: Access recently pasted playlists and re-queue items with one click.
+Grab the latest Windows build from [GitHub Releases](https://github.com/projectGloria/Carmen/releases), or package it locally with `npm run dist:win` / `npm run dist:portable`:
 
-### 3. Engine Settings &amp; Bandwidth Tuning
-Fine-tune how Carmen operates to suit your connection and storage preferences:
+- **Installer**: `Carmen-1.0.0-Setup.exe` (NSIS installer with Desktop and Start Menu shortcuts)
+- **Portable**: `Carmen-1.0.0-Portable.exe` (standalone executable)
 
-- **Worker Concurrency**: Adjust parallel search and download slots (1 to 6 concurrent workers).
-- **Download Speed Throttling**: Cap bandwidth consumption to maintain connection headroom.
-- **Provider Chain Selection**: Enable, disable, or reorder preferred audio sources.
-- **Keep Trying Preference**: Configure background retry intervals and persistence across app restarts.
-- **Audio Feedback**: Optional auditory chimes for completed batches and error notifications.
+On first run, open **Settings** (`Ctrl+3`) and choose your **Download folder** and enabled **Sources**. Packaged builds store configuration, queue state, history, and session logs under `%APPDATA%\Carmen`.
 
----
+## Usage
 
-## 🚀 Installation &amp; Usage
+### 1. Download a playlist, album, or track
 
-### Windows Installer
+1. Open **Add music** (`Ctrl+2`).
+2. Paste a Spotify, Deezer, Tidal, or Qobuz link (or type a song/artist name) into the search box and press **Enter**.
+3. Preview the resolved tracks and add them to the queue. Switch to **Downloads** (`Ctrl+1`) to monitor progress.
 
-Download the latest installer or portable executable from the releases:
+### 2. Import a public Spotify profile
 
-```powershell
-# Run the NSIS Installer (configures Start Menu, Desktop shortcuts, and uninstaller)
-Carmen-1.0.0-Setup.exe
+1. In **Add music**, select the **Spotify profile** tab.
+2. Paste a Spotify profile link or enter a username (or type `user:<username>` in the main search box).
+3. Choose a playlist order (newest first, most tracks, alphabetical, etc.) and queue the playlists you want. Shared tracks are deduplicated and each playlist gets its own subfolder and `.m3u8` file.
 
-# Or run the single-file Portable edition directly
-Carmen-1.0.0-Portable.exe
-```
+### 3. Control the queue and retries
 
-When installed:
-- Shortcuts are created on your Desktop and Start Menu.
-- Application state (history, download manifest, configuration) is securely saved in `%APPDATA%\Carmen`.
-- Minimized runs remain accessible via the Windows System Tray icon.
+- Use the bottom transport bar to pause/resume all transfers or cancel the run.
+- Use the **All / Working / Downloaded / Missing** filters in **Downloads** to inspect specific states, or switch between **Playlists** and **Queue order** views.
+- Enable **Keep trying** in **Settings** (`Ctrl+3`) to retry missing tracks automatically after the queue finishes.
 
-### Quick Start Workflow
-
-1. **Launch Carmen**.
-2. Go to **Settings** and choose your preferred **Download Directory** and **Provider Chain**.
-3. Switch to **Add music** and paste a Spotify, Deezer, or SoundCloud link into the box.
-4. Click **Add to Queue** to initiate the automatic resolver.
-5. Watch the **Downloads** view as the cascade worker pool finds, validates, and downloads your lossless FLACs.
-
----
-
-## 🏗️ Architecture
-
-The codebase enforces a three-tier separation of concerns with a strict boundary between Electron, Node.js, and React:
-
-```
-Carmen/
-├── main.js                  # Electron Main Process (OS filesystem, downloads, tray, IPC)
-├── src/
-│   ├── engine/              # Pure ESM Download Engine (Independent of DOM & Electron)
-│   │   ├── controller.mjs   # Queue state machine, retry scheduler & orchestrator
-│   │   ├── pool.mjs         # Worker slots & concurrency management
-│   │   ├── chain.mjs        # Search attempt plans & fallback strategies
-│   │   ├── worker.mjs       # Per-track webview execution lifecycle
-│   │   ├── matching.mjs     # Title, artist & duration fuzzy-scoring algorithm
-│   │   └── sources.mjs      # Link resolvers (Spotify, Deezer, SoundCloud)
-│   └── ui/                  # React 19 Frontend (Built via Vite)
-│       ├── App.jsx          # View router, sidebar & transport wrapper
-│       ├── views/           # QueueView, AddView, SettingsView
-│       └── components/      # TrackRow, TransportBar, SourceIcon
-└── scripts/                 # Icon generation, brand marks & smoke checks
-```
-
-- **`main.js`**: Controls disk I/O, Chromium `will-download` handlers, byte-range speed throttling, Windows tray lifecycle, single-instance mutex locks, and session JSONL logging.
-- **`src/engine/`**: Pure Node ESM download engine. Contains **no React or DOM code**. Injected browser scripts (`cascade-lucida.mjs`, `cascade-monochrome.mjs`) are compiled with zero scope closures to guarantee fault-tolerant injection inside sandboxed `<webview>` tags.
-- **`src/ui/`**: Responsive React 19 interface. Synchronizes with the engine controller via `useSyncExternalStore` for flicker-free, 60fps UI rendering.
-
----
-
-## 🛠️ Building from Source
+## Building from source
 
 ### Prerequisites
 
-- **Node.js**: v20 or higher
-- **npm**: v10 or higher
 - **Windows 10/11 x64**
-- **ffmpeg** (optional; required only if running the full Electron end-to-end integration test suite)
+- **Node.js** (v20+ recommended) and **npm**
+- **ffmpeg** on `PATH` (optional; only required for `npm run test:electron` and `npm run test:packaged`)
 
-### Build Instructions
+### Steps
 
-1. **Clone the repository:**
+1. Clone the repository and install dependencies:
+
    ```powershell
    git clone https://github.com/projectGloria/Carmen.git
    cd Carmen
+   npm ci
    ```
 
-2. **Install dependencies:**
-   ```powershell
-   npm install
-   ```
+2. Run the unit tests and linter:
 
-3. **Run the test suite:**
    ```powershell
    npm test
+   npm run lint
    ```
 
-4. **Start in development mode:**
+3. Run in development mode:
+
    ```powershell
-   # In terminal 1: run Vite UI dev server
+   # Option A: Preview the React UI in a browser with mock data (http://localhost:5173)
    npm run dev:ui
 
-   # In terminal 2: build UI bundle and start Electron
+   # Option B: Build the renderer bundle and launch Electron
    npm run build:ui
    npm start
    ```
 
-5. **Package Windows executables:**
+4. Package Windows executables (outputs to `release/`):
+
    ```powershell
-   # Build the NSIS installer and portable executable into release/
-   npm run dist:win
-   npm run dist:portable
+   npm run dist:win       # release/Carmen-1.0.0-Setup.exe
+   npm run dist:portable  # release/Carmen-1.0.0-Portable.exe
+   npm run pack           # unpacked build in release/win-unpacked/
    ```
 
----
+## Configuration & troubleshooting
 
-## 🎨 Icon &amp; Design Philosophy
+<details>
+<summary>Project layout, data locations, and diagnostics</summary>
 
-<p align="center">
-  <img src="build/icon.png" alt="Carmen Icon" width="100" height="100" />
-  &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="build/tray.png" alt="Carmen System Tray Icon" width="32" height="32" />
-</p>
-
-The visual identity of Carmen is generated and managed via [`scripts/make-icon.mjs`](scripts/make-icon.mjs):
-- **Multi-Resolution Windows Icon**: Encapsulates multi-size icon layers inside `build/icon.ico` (16px to 256px) for desktop shortcuts, Windows Explorer previews, and the NSIS installer.
-- **Dedicated Tray Indicator**: Features a 32px icon bitmap for the Windows system tray (`build/tray.png`) and a 512px high-res master asset (`build/icon.png`).
-- **High-Contrast Silhouette**: Engineered for instant recognition against light and dark Windows themes and taskbars.
-
----
-
-## 🛡️ Reliability &amp; Testing
-
-Carmen includes an extensive automated regression test suite ensuring download integrity, state persistence, and error recovery:
-
-- **320 Passing Unit &amp; Regression Tests**: Validates fuzzy track matching, duration drift tolerances, artist gate filters, rate-limiting, and cascade plan advancement.
-- **Atomic Disk Persistence**: Queue state, download manifests, and configuration files are written atomically with a strict quit/flush handshake to eliminate corruption during sudden process termination.
-- **Stall &amp; Collision Protection**: Detects stalled transfers (2-minute silence gate), recovers partial streams via HTTP Range requests, and automatically sanitizes reserved Windows filenames (`CON`, `PRN`, `AUX`, `NUL`).
-- **Memory &amp; Resource Hygiene**: Active webview contexts, event listeners, and pending timeouts are cleared immediately on item settlement or cancellation.
-
-Run the test suite at any time:
-
-```powershell
-npm test
+```text
+Carmen/
+├── main.js              # Electron main process (IPC, downloads, throttling, tray, persistence)
+├── src/
+│   ├── engine/          # Pure ESM engine (controller, pool, chain, worker, matching, sources, cascades)
+│   └── ui/              # React 19 interface (QueueView, AddView, SettingsView, mock controller)
+├── scripts/             # Icon generators, Electron smoke tests, benchmarks
+├── test/                # Node unit & regression tests (node:test)
+└── build/               # Generated app and tray icons (icon.ico, icon.png, tray.png)
 ```
 
----
+- **Runtime data**: Development runs (`npm start`) write `state/` and `logs/` inside the repository root (both are gitignored). Packaged builds store them under `%APPDATA%\Carmen`.
+- **Speed limiter auto-disable**: If a download server restarts a transfer when paused (refusing HTTP Range resume), Carmen disables the speed limit for the current session and displays a notice in **Settings**. Restart the app to re-enable it.
+- **Diagnostics report**: Open **Settings → Diagnostics** to export a single readable report summarizing session events, source responses, and unfinished tracks, or open the raw JSONL logs folder directly.
+- **Electron smoke test**: Run `npm run test:electron` (requires `ffmpeg` on `PATH`) to verify end-to-end Electron behavior against isolated local fixtures.
 
-## 📜 License &amp; Credits
+</details>
 
-Distributed under the **[ISC License](package.json)**.
+## Contributing
 
-- **Brand Trademarks**: Service marks and logos (Spotify, Deezer, Qobuz, Tidal, Amazon Music, SoundCloud, YouTube, Napster, Yandex) are trademarks of their respective owners. Brand icons are CC0 path data provided by [Simple Icons](https://simple-icons.github.io/) and are used solely to indicate audio source compatibility.
-- **Audio Integrity**: Carmen is a client utility that automates personal library organization and metadata tagging. Please respect artist rights and terms of service in your jurisdiction.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup, architecture constraints, and pull request guidelines. Follow [`AGENTS.md`](AGENTS.md) and review [`RELIABILITY.md`](RELIABILITY.md) before changing persistence or retry behavior, and run `npm test` and `npm run lint` before submitting.
+
+## License & credits
+
+Distributed under the **ISC License** — see [`LICENSE`](LICENSE) for details.
+
+- Service icons in `assets/services/` use CC0 path data from [Simple Icons](https://simple-icons.github.io/). Service names and trademarks belong to their respective owners and are used solely to indicate compatibility.
