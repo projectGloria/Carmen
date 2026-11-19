@@ -173,6 +173,17 @@ On first run, open **Settings** (`Ctrl+3`) and choose your **Download folder** a
    npm run pack           # unpacked build in release/win-unpacked/
    ```
 
+## How to release
+
+1. Update `"version"` in `package.json`, commit your changes, and create a version tag:
+
+   ```powershell
+   git tag v1.0.0 && git push --tags
+   ```
+
+2. The **Build Installers** workflow (`.github/workflows/build-installers.yml`) builds the Windows x64 NSIS installer (`Carmen-<version>-win-x64.exe`), uploads it as the `installers` workflow artifact, and publishes a GitHub Release with the installer attached.
+3. Download installers from [GitHub Releases](https://github.com/projectGloria/Carmen/releases) (for tagged releases) or from the `installers` artifact under **Actions → Build Installers** (including manual **Run workflow** builds).
+
 ## Configuration & troubleshooting
 
 <details>
