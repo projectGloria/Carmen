@@ -221,6 +221,14 @@ app.on('render-process-gone', (event, contents, details) => {
     reason: details && details.reason, exitCode: details && details.exitCode,
     url: safeUrl(contents),
   });
+  if (mainWindow && contents === mainWindow.webContents) {
+    liveItems.forEach((rec) => {
+      try { rec.item.pause(); } catch (e) { /* already finished */ }
+      if (rec.ctx && rec.savePath) rememberTransfer(rec.item, rec.ctx, rec.savePath);
+    });
+    pendingContexts.clear();
+    resumeContexts.clear();
+  }
 });
 app.on('child-process-gone', (event, details) => {
   logEvent('crash.child', {
@@ -413,13 +421,16 @@ async function readJsonAsync(file, fallback) {
 const stateWrites = new Map();
 
 function queueStateWrite(file, operation) {
-  const previous = stateWrites.get(file) || Promise.resolve();
+  const key = typeof savePathKey === 'function'
+    ? savePathKey(file)
+    : (process.platform === 'win32' ? path.resolve(file).toLowerCase() : path.resolve(file));
+  const previous = stateWrites.get(key) || Promise.resolve();
   const write = previous.then(operation).catch(e => {
     logEvent('state.error', { file: path.basename(file), message: e.message });
   }).finally(() => {
-    if (stateWrites.get(file) === write) stateWrites.delete(file);
+    if (stateWrites.get(key) === write) stateWrites.delete(key);
   });
-  stateWrites.set(file, write);
+  stateWrites.set(key, write);
   return write;
 }
 
@@ -582,18 +593,35 @@ function takeResumeContext(item) {
  * on disk, still short of the total. Anything else is dropped here rather than
  * offered and then failed.
  */
-function resumableTransfers() {
+function isStagingPath(file) {
+  return /^\.(?:carmen|lucida)-[a-f0-9-]+\.flac$/i.test(path.basename(file || ''));
+}
+
+function transferProtectedPaths() {
+  const keys = new Set();
+  for (const t of Object.values(transfers)) {
+    if (t?.savePath) keys.add(savePathKey(t.savePath));
+    if (t?.ctx?.finalPath) keys.add(savePathKey(t.ctx.finalPath));
+  }
+  return keys;
+}
+
+function resumableTransfers(adoptableIds = null) {
+  const adoptable = Array.isArray(adoptableIds) ? new Set(adoptableIds) : null;
   const out = [];
   for (const id of Object.keys(transfers)) {
     const t = transfers[id];
+    const pKey = t?.savePath ? savePathKey(t.savePath) : null;
+    if (pKey && liveSavePaths.has(pKey)) continue;
     const have = t && t.savePath ? partialSize(t.savePath) : 0;
-    const resumable = !!(t && t.urlChain && t.urlChain.length && have > 0 &&
+    const wanted = !adoptable || adoptable.has(id);
+    const resumable = !!(wanted && t && t.urlChain && t.urlChain.length && have > 0 &&
       (!t.total || have < t.total));
     if (resumable) out.push({ itemId: id, file: t.file, received: have, total: t.total || 0 });
     else if (t) {
-      // Nothing to resume: clear the record, and the stray partial with it, so a
-      // fresh download of the same track does not land beside it as "name (1)".
-      if (t.savePath && have > 0 && t.total && have < t.total) {
+      // Nothing to resume: clear the record, and the stray partial/staging file
+      // with it, so a fresh download does not leak disk space or land beside it.
+      if (t.savePath && (isStagingPath(t.savePath) || (have > 0 && t.total && have < t.total))) {
         try { fs.unlinkSync(t.savePath); } catch (e) { /* best effort */ }
       }
       delete transfers[id];
@@ -603,13 +631,14 @@ function resumableTransfers() {
   return out;
 }
 
-ipcMain.handle('transfers-resumable', () => resumableTransfers());
+ipcMain.handle('transfers-resumable', (_event, adoptableIds) => resumableTransfers(adoptableIds));
 
 ipcMain.handle('transfer-resume', (event, itemId) => {
   const t = transfers[itemId];
   if (!t || !t.urlChain || !t.urlChain.length) return { ok: false, reason: 'unknown' };
+  if (t.savePath && liveSavePaths.has(savePathKey(t.savePath))) return { ok: false, reason: 'already-live' };
   const offset = partialSize(t.savePath);
-  if (!offset) return { ok: false, reason: 'no-partial' };
+  if (!offset) { forgetTransfer(itemId); return { ok: false, reason: 'no-partial' }; }
 
   const ctx = Object.assign({}, t.ctx, {
     itemId,
@@ -651,6 +680,33 @@ function loadState() {
   // the critical path. See pruneManifest.
   setTimeout(() => { pruneManifest().catch(() => {}); }, 2000);
   setTimeout(() => { cleanLeftoverPartFiles(downloadPath).catch(err => logEvent('cleanup.failed', { message: err.message })); }, 2500);
+  setTimeout(() => { pruneScrapeCache().catch(() => {}); }, 3500);
+}
+
+const CACHE_MAX_FILES = 500;
+async function pruneScrapeCache() {
+  let names;
+  try { names = await fs.promises.readdir(CACHE_DIR); } catch { return; }
+  const now = Date.now();
+  const kept = [];
+  for (const name of names) {
+    if (quitting) return;
+    const full = path.join(CACHE_DIR, name);
+    try {
+      const st = await fs.promises.stat(full);
+      if (now - st.mtimeMs > CACHE_TTL_MS) {
+        await fs.promises.unlink(full).catch(() => {});
+      } else {
+        kept.push({ full, mtimeMs: st.mtimeMs });
+      }
+    } catch { /* disappeared */ }
+  }
+  if (kept.length > CACHE_MAX_FILES) {
+    kept.sort((a, b) => a.mtimeMs - b.mtimeMs);
+    for (const entry of kept.slice(0, kept.length - CACHE_MAX_FILES)) {
+      await fs.promises.unlink(entry.full).catch(() => {});
+    }
+  }
 }
 
 async function cleanLeftoverPartFiles(dir) {
@@ -668,7 +724,8 @@ async function cleanLeftoverPartFiles(dir) {
       const full = path.join(folder, ent.name);
       if (ent.isDirectory()) { folders.push(full); continue; }
       if (!ent.isFile() || (!/\.(part|crdownload)$/i.test(ent.name)
-        && !/^\.(?:carmen|lucida)-[a-f0-9-]+\.flac(?:\.[a-f0-9-]+\.metadata)?$/i.test(ent.name))) continue;
+        && !/^\.(?:carmen|lucida)-[a-f0-9-]+\.flac(?:\.[a-f0-9-]+\.metadata|\.arttmp)?$/i.test(ent.name)
+        && !/^cover\.(?:png|jpe?g)\.\d+\.tmp$/i.test(ent.name))) continue;
       const key = savePathKey(full);
       if (protectedPaths.has(key) || liveSavePaths.has(key)) continue;
       try {
@@ -773,14 +830,14 @@ ipcMain.on('queue-save', (event, snap, immediate = false) => {
   if (immediate) { saveQueue.cancel(); writeJson(QUEUE_FILE, snap); }
   else saveQueue(snap);
 });
-ipcMain.handle('queue-load', () => readJson(QUEUE_FILE, null));
+ipcMain.handle('queue-load', () => readJsonAsync(QUEUE_FILE, null));
 ipcMain.on('queue-clear', () => {
   saveQueue.cancel(); // otherwise the in-flight debounce writes the file straight back
   queueStateWrite(QUEUE_FILE, () => fs.promises.unlink(QUEUE_FILE).catch(e => { if (e.code !== 'ENOENT') throw e; }));
 });
 
 const PROFILES_FILE = path.join(STATE_DIR, 'profiles.json');
-ipcMain.handle('profiles-get', () => readJson(PROFILES_FILE, []));
+ipcMain.handle('profiles-get', () => readJsonAsync(PROFILES_FILE, []));
 ipcMain.on('profiles-save', (event, profiles) => writeJson(PROFILES_FILE, profiles));
 
 // What has been searched or pasted, newest first. The renderer owns the shape
@@ -788,7 +845,7 @@ ipcMain.on('profiles-save', (event, profiles) => writeJson(PROFILES_FILE, profil
 // and an unbounded one would be read back in full on every launch.
 const HISTORY_FILE = path.join(STATE_DIR, 'history.json');
 const HISTORY_MAX = 60;
-ipcMain.handle('history-get', () => readJson(HISTORY_FILE, []));
+ipcMain.handle('history-get', () => readJsonAsync(HISTORY_FILE, []));
 ipcMain.on('history-save', (event, entries) => {
   writeJson(HISTORY_FILE, Array.isArray(entries) ? entries.slice(0, HISTORY_MAX) : []);
 });
@@ -1006,17 +1063,19 @@ function hasEmbeddedArtwork(file) {
       const len = (head[1] << 16) | (head[2] << 8) | head[3];
       if (type === 6 && len >= 32 && len <= 16 * 1024 * 1024) {
         const body = Buffer.alloc(len);
-        if (fs.readSync(fd, body, 0, len, off + 4) !== len) return false;
-        let at = 4;
-        for (let field = 0; field < 2; field++) {
-          if (at + 4 > len) return false;
-          at += 4 + body.readUInt32BE(at);
+        if (fs.readSync(fd, body, 0, len, off + 4) === len) {
+          let at = 4, validHeader = true;
+          for (let field = 0; field < 2; field++) {
+            if (at + 4 > len) { validHeader = false; break; }
+            at += 4 + body.readUInt32BE(at);
+          }
+          at += 16;
+          if (validHeader && at + 4 <= len) {
+            const imageLength = body.readUInt32BE(at); at += 4;
+            if (imageLength > 0 && at + imageLength === len
+                && !nativeImage.createFromBuffer(body.subarray(at)).isEmpty()) return true;
+          }
         }
-        at += 16;
-        if (at + 4 > len) return false;
-        const imageLength = body.readUInt32BE(at); at += 4;
-        if (imageLength > 0 && at + imageLength === len
-            && !nativeImage.createFromBuffer(body.subarray(at)).isEmpty()) return true;
       }
       off += 4 + len;
     }
@@ -1046,10 +1105,8 @@ function isValidFlacSync(file, bytes = 0) {
       const hit = flacValidCache.get(key);
       if (hit && hit.stamp === stamp) return hit.ok;
       const ok = isCompleteFlacFile(file, bytes) && hasEmbeddedArtwork(file);
-      if (ok) {
-        flacValidCache.set(key, { stamp, ok: true });
-        while (flacValidCache.size > FLAC_CACHE_MAX) flacValidCache.delete(flacValidCache.keys().next().value);
-      }
+      flacValidCache.set(key, { stamp, ok });
+      while (flacValidCache.size > FLAC_CACHE_MAX) flacValidCache.delete(flacValidCache.keys().next().value);
       return ok;
     }
   }
@@ -1136,9 +1193,12 @@ function folderFor(folderName) {
 function checkDownloaded(q, names = null, scan = false, pendingKeys = null) {
   if (!q) return { done: false };
   const rec = q.key ? manifest[q.key] : null;
-  const pendingPath = file => pendingKeys
-    ? pendingKeys.has(savePathKey(file))
-    : Object.values(transfers).some(t => t?.savePath && savePathKey(t.savePath) === savePathKey(file));
+  const pendingPath = file => {
+    const k = savePathKey(file);
+    if (pendingKeys) return pendingKeys.has(k);
+    return Object.values(transfers).some(t => (t?.savePath && savePathKey(t.savePath) === k)
+      || (t?.ctx?.finalPath && savePathKey(t.ctx.finalPath) === k));
+  };
   const validFlac = (file, bytes = 0) => (typeof isValidFlacSync === 'function'
     ? isValidFlacSync(file, bytes)
     : (isCompleteFlacFile(file, bytes) && hasEmbeddedArtwork(file)));
@@ -1199,7 +1259,9 @@ function scanDownloadFolders(extraDirs = []) {
   if (activeFolderScan) return activeFolderScan;
   const run = (async () => {
     const { readFlacIdentity } = await getScanEngines();
-    const protectedPaths = new Set(Object.values(transfers).filter(t => t?.savePath).map(t => savePathKey(t.savePath)));
+    const protectedPaths = typeof transferProtectedPaths === 'function'
+      ? transferProtectedPaths()
+      : new Set(Object.values(transfers).flatMap(t => [t?.savePath, t?.ctx?.finalPath].filter(Boolean).map(savePathKey)));
     const visited = new Set();
     const queue = [path.resolve(downloadPath), ...extraDirs.map(d => path.resolve(d))];
     const entries = [];
@@ -1243,8 +1305,9 @@ function scanDownloadFolders(extraDirs = []) {
             const valid = typeof validateFlacCached === 'function'
               ? await validateFlacCached(file, stat.size)
               : (await isFlacFileAsync(file) && isCompleteFlacFile(file) && hasEmbeddedArtwork(file));
+            const reusedIdentity = valid && prev && prev.stamp === stamp && prev.identity ? prev.identity : null;
             const next = valid
-              ? { stamp, valid: true, identity: readFlacIdentity(file) }
+              ? { stamp, valid: true, identity: reusedIdentity || readFlacIdentity(file) }
               : { stamp, valid: false, identity: null };
             flacIdentityCache.set(key, next);
             if (next.identity) {
@@ -1320,7 +1383,9 @@ ipcMain.handle('downloads-check', async (event, list, opts) => {
   // Startup must use durable completions or interrupted-transfer records. An
   // untracked, truncated audio file cannot be proven complete by a folder scan.
   const scan = !opts?.restore && opts?.scan !== false && (opts?.scan !== undefined ? !!opts.scan : config.scanFolderForExisting !== false);
-  const pendingKeys = new Set(Object.values(transfers).filter(t => t?.savePath).map(t => savePathKey(t.savePath)));
+  const pendingKeys = typeof transferProtectedPaths === 'function'
+    ? transferProtectedPaths()
+    : new Set(Object.values(transfers).flatMap(t => [t?.savePath, t?.ctx?.finalPath].filter(Boolean).map(savePathKey)));
   const results = checks.map((q) => checkDownloaded(q, null, false, pendingKeys));
   const validateIndexes = async (indexes) => {
     for (let start = 0; start < indexes.length; start += 8) {
@@ -1436,6 +1501,7 @@ const REPORT_NAME = '_carmen.json';
 const reportCache = new Map();
 const dirtyReports = new Set();
 let reportFlushTimer = null;
+let reportFirstDirtyAt = 0;
 
 function reportKey(title, artist) {
   return normTokens(title).join(' ') + '|' + normTokens(artist).join(' ');
@@ -1456,19 +1522,23 @@ function emptyReport(folderName) {
 function flushReports() {
   clearTimeout(reportFlushTimer);
   reportFlushTimer = null;
+  reportFirstDirtyAt = 0;
   const writes = [];
-  for (const file of dirtyReports) {
-    const rec = reportCache.get(file);
-    if (rec) writes.push(writeJson(file, rec.report, 2));
+  for (const key of dirtyReports) {
+    const rec = reportCache.get(key);
+    if (rec) writes.push(writeJson(rec.file, rec.report, 2));
   }
   dirtyReports.clear();
   return Promise.all(writes).then(() => evictReports());
 }
 
-function saveReportSoon(file) {
-  dirtyReports.add(file);
+function saveReportSoon(key) {
+  dirtyReports.add(key);
+  if (!reportFirstDirtyAt) reportFirstDirtyAt = Date.now();
   clearTimeout(reportFlushTimer);
-  reportFlushTimer = setTimeout(flushReports, 500);
+  // Bounded by maxWait so rapid completions/skips cannot starve report flushes.
+  const wait = Math.max(0, Math.min(500, reportFirstDirtyAt + 2000 - Date.now()));
+  reportFlushTimer = setTimeout(flushReports, wait);
 }
 
 // Folders whose reports stay parsed in memory. A profile download touches one
@@ -1480,10 +1550,10 @@ const REPORT_CACHE_MAX = 24;
 
 function evictReports() {
   if (reportCache.size <= REPORT_CACHE_MAX) return;
-  for (const file of [...reportCache.keys()]) {
+  for (const key of [...reportCache.keys()]) {
     if (reportCache.size <= REPORT_CACHE_MAX) break;
-    if (dirtyReports.has(file) || stateWrites.has(file)) continue;
-    reportCache.delete(file);
+    if (dirtyReports.has(key) || stateWrites.has(key)) continue;
+    reportCache.delete(key);
   }
 }
 
@@ -1493,7 +1563,8 @@ function writeReport(folderName, section, entry) {
   if (!entry || !entry.title) return;
   const dir = folderFor(folderName);
   const file = path.join(dir, REPORT_NAME);
-  let cached = reportCache.get(file);
+  const key = savePathKey(file);
+  let cached = reportCache.get(key);
   if (!cached) {
     try {
       // A group whose every track failed never had its folder created by
@@ -1503,17 +1574,17 @@ function writeReport(folderName, section, entry) {
       logEvent('report.error', { folder: folderName || null, message: e.message });
       return;
     }
-    cached = { report: Object.assign(emptyReport(folderName), readJson(file, null) || {}) };
-    reportCache.set(file, cached);
+    cached = { file, report: Object.assign(emptyReport(folderName), readJson(file, null) || {}) };
+    reportCache.set(key, cached);
   }
   const rep = cached.report;
   if (!Array.isArray(rep.downloaded)) rep.downloaded = [];
   if (!Array.isArray(rep.missing)) rep.missing = [];
 
-  const key = reportKey(entry.title, entry.artist);
-  const prev = rep[section].filter((e) => reportKey(e.title, e.artist) === key)[0];
-  rep.downloaded = rep.downloaded.filter((e) => reportKey(e.title, e.artist) !== key);
-  rep.missing = rep.missing.filter((e) => reportKey(e.title, e.artist) !== key);
+  const rKey = reportKey(entry.title, entry.artist);
+  const prev = rep[section].filter((e) => reportKey(e.title, e.artist) === rKey)[0];
+  rep.downloaded = rep.downloaded.filter((e) => reportKey(e.title, e.artist) !== rKey);
+  rep.missing = rep.missing.filter((e) => reportKey(e.title, e.artist) !== rKey);
 
   const rec = Object.assign({ at: new Date().toISOString() }, entry);
   // "already on disk" is re-reported on every launch by restoreSession. That must
@@ -1524,7 +1595,7 @@ function writeReport(folderName, section, entry) {
 
   rep.updated = new Date().toISOString();
   rep.counts = { downloaded: rep.downloaded.length, missing: rep.missing.length };
-  saveReportSoon(file);
+  saveReportSoon(key);
   evictReports();
   logEvent('report.write', {
     folder: folderName || null, section, title: entry.title,
@@ -1598,7 +1669,7 @@ ipcMain.handle('profile-library-load', async (event, folderName) => {
     const dir = folderFor(folderName);
     return await loadValidatedLibrary(dir, async (file, bytes, track) =>
       await validateFlacCached(file, bytes) &&
-      !Object.values(transfers).some(t => t?.savePath && savePathKey(t.savePath) === savePathKey(file)) &&
+      !transferProtectedPaths().has(savePathKey(file)) &&
       (await checkDownloadIdentity(file, track)).ok);
   } catch (err) {
     logEvent('profile.library.load.error', { folder: folderName, message: err.message });
@@ -1858,13 +1929,14 @@ ipcMain.on('clear-download-context', (event, webContentsId) => {
   if (webContentsId) pendingContexts.delete(webContentsId);
 });
 
-function takeDownloadContext(webContents) {
+function takeDownloadContext(webContents, { allowFallback = true } = {}) {
   const id = webContents && webContents.id;
   if (id && pendingContexts.has(id)) {
     const ctx = pendingContexts.get(id);
     pendingContexts.delete(id);
     return ctx;
   }
+  if (!allowFallback) return null;
   const ctx = fallbackContext;
   fallbackContext = null;
   return ctx;
@@ -2017,6 +2089,7 @@ function throttleTick() {
     let received;
     try { received = item.getReceivedBytes(); } catch (e) { liveItems.delete(rec); return; }
     if (received !== rec.lastReceived || userPaused || rec.throttled || quitting) {
+      if (received > rec.lastReceived) rec.resumeAttempts = 0;
       rec.lastByteAt = now;
       rec.lastReceived = received;
     }
@@ -2095,6 +2168,14 @@ ipcMain.on('downloads-cancel', () => {
   const n = liveItems.size;
   liveItems.forEach((rec) => { try { rec.item.cancel(); } catch (e) { /* already finished */ } });
   liveItems.clear();
+  resumeContexts.clear();
+  for (const [id, t] of Object.entries(transfers)) {
+    if (t?.savePath && isStagingPath(t.savePath) && !liveSavePaths.has(savePathKey(t.savePath))) {
+      fs.promises.unlink(t.savePath).catch(() => {});
+    }
+    delete transfers[id];
+  }
+  saveTransfers();
   logEvent('download.cancel', { cancelled: n });
 });
 
@@ -2105,9 +2186,18 @@ ipcMain.on('download-cancel-item', (_event, itemId) => {
   const finalizing = finalizingItems.get(itemId);
   if (finalizing) finalizing.cancelled = true;
   for (const [id, ctx] of pendingContexts) if (ctx.itemId === itemId) pendingContexts.delete(id);
+  for (const [saveKey, ctx] of resumeContexts) if (ctx.itemId === itemId) resumeContexts.delete(saveKey);
   mediaTransfers.get(itemId)?.abort();
+  let wasLive = false;
   for (const rec of liveItems) {
-    if (rec.itemId === itemId) { try { rec.item.cancel(); } catch {} }
+    if (rec.itemId === itemId) { wasLive = true; try { rec.item.cancel(); } catch {} }
+  }
+  if (!wasLive && itemId && transfers[itemId]) {
+    const stalePath = transfers[itemId].savePath;
+    forgetTransfer(itemId);
+    if (stalePath && isStagingPath(stalePath) && !liveSavePaths.has(savePathKey(stalePath))) {
+      fs.promises.unlink(stalePath).catch(() => {});
+    }
   }
   const starting = pendingProviderStarts.get(itemId);
   if (starting) starting.cancelled = true;
@@ -2238,7 +2328,10 @@ async function checkDownloadIdentity(file, context) {
   const key = savePathKey(file);
   const stamp = `${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
   let cached = flacIdentityCache.get(key);
-  if (!cached || cached.stamp !== stamp) {
+  if (cached && cached.stamp === stamp && cached.valid === false) {
+    return { ok: false, reason: 'invalid FLAC' };
+  }
+  if (!cached || cached.stamp !== stamp || !cached.identity) {
     cached = { stamp, identity: readFlacIdentity(file) };
     flacIdentityCache.set(key, cached);
     cached.identity.catch(() => { if (flacIdentityCache.get(key) === cached) flacIdentityCache.delete(key); });
@@ -2302,7 +2395,7 @@ function handleWillDownload(event, item, webContents) {
   // shared slot is what lets several downloads be in flight at once.
   const direct = providerDownloads.get(item.getURLChain?.()[0] || item.getURL());
   if (direct) { clearTimeout(direct.timer); providerDownloads.delete(item.getURLChain?.()[0] || item.getURL()); }
-  const ctx = direct?.context || takeDownloadContext(webContents) || takeResumeContext(item);
+  const ctx = direct?.context || takeDownloadContext(webContents, { allowFallback: false }) || takeResumeContext(item) || takeDownloadContext(null);
   let rec = null;
   try {
 
@@ -2369,10 +2462,10 @@ function handleWillDownload(event, item, webContents) {
     // 'done' below, delete a file that had already finished.
     let initialReceived = 0;
     try { initialReceived = item.getReceivedBytes() || 0; } catch (e) { /* fresh */ }
-    rec = { item, itemId: ctx?.itemId, allowed: initialReceived, last: Date.now(), throttled: false, mark: initialReceived,
+    rec = { item, ctx, itemId: ctx?.itemId, allowed: initialReceived, last: Date.now(), throttled: false, mark: initialReceived,
       lastReceived: initialReceived, lastByteAt: Date.now(), resumeAttempts: 0, interrupted: false };
     if (!resumedPath) savePath = freeSavePath(savePath, rec);
-    const finalPath = ctx?.finalPath || savePath;
+    let finalPath = ctx?.finalPath || savePath;
     if (!resumedPath) {
       liveSavePaths.set(savePathKey(finalPath), rec);
       savePath = path.join(path.dirname(finalPath), `.carmen-${crypto.randomUUID()}.flac`);
@@ -2538,13 +2631,28 @@ function handleWillDownload(event, item, webContents) {
             if (savePath !== finalPath) {
               // link is exclusive: an unrelated file created during the transfer
               // must never be overwritten by promotion of our temporary file.
-              try {
-                await fs.promises.link(savePath, finalPath);
-              } catch (err) {
-                if (err.code === 'EXDEV' || err.code === 'ENOTSUP' || err.code === 'EPERM') {
-                  await fs.promises.copyFile(savePath, finalPath, fs.constants.COPYFILE_EXCL);
-                } else {
-                  throw err;
+              // On EEXIST (e.g. a resumed transfer whose original target was filled
+              // while offline), pick a free " (n)" sibling instead of discarding it.
+              for (let attempt = 0; attempt < 5; attempt++) {
+                try {
+                  await fs.promises.link(savePath, finalPath);
+                  break;
+                } catch (err) {
+                  if (err.code === 'EXDEV' || err.code === 'ENOTSUP' || err.code === 'EPERM') {
+                    try {
+                      await fs.promises.copyFile(savePath, finalPath, fs.constants.COPYFILE_EXCL);
+                      break;
+                    } catch (copyErr) {
+                      if (copyErr.code !== 'EEXIST' || attempt === 4) throw copyErr;
+                    }
+                  } else if (err.code !== 'EEXIST' || attempt === 4) {
+                    throw err;
+                  }
+                  const oldFinalKey = savePathKey(finalPath);
+                  if (liveSavePaths.get(oldFinalKey) === rec) liveSavePaths.delete(oldFinalKey);
+                  finalPath = freeSavePath(finalPath, rec);
+                  liveSavePaths.set(savePathKey(finalPath), rec);
+                  rec.finalPath = finalPath;
                 }
               }
               await fs.promises.unlink(savePath);
@@ -3054,19 +3162,20 @@ let flushed = false;
 function flushAllState() {
   if (flushing) return flushing;
   flushing = (async () => {
-    // The renderer holds the queue snapshot, and its persist timer cannot fire
-    // once its window goes away. Ask for a final save and give it one turn
-    // before flushing - a track that changed status seconds before the quit is
-    // exactly the one the next launch most needs to know about.
-    toUI('flush-state');
-    await new Promise((r) => setTimeout(r, 400));
     // Pause rather than cancel: a cancelled DownloadItem takes its partial file
     // with it, and that file is exactly what the next launch resumes from.
+    // Record the latest transfer metadata before flushing so redirects/ETags
+    // learned within the last 10s throttle window are not lost.
     liveItems.forEach((rec) => {
       try { rec.item.pause(); } catch (e) { /* already finished */ }
+      if (rec.ctx && rec.savePath) rememberTransfer(rec.item, rec.ctx, rec.savePath);
     });
     try {
       await Promise.all([...finalizingDownloads]);
+      // Ask the renderer for its final queue snapshot AFTER finalizingDownloads
+      // settle so newly completed tracks are reflected in queue.json.
+      toUI('flush-state');
+      await new Promise((r) => setTimeout(r, 400));
       await Promise.all([
         Promise.resolve(saveTransfers.flush()),
         Promise.resolve(saveManifest.flush()),

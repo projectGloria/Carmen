@@ -1,4 +1,4 @@
-import { useMemo, useState, useSyncExternalStore } from 'react';
+import { useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { getController, isElectron, ipc, sources } from '../engine.js';
 import * as history from '../history.js';
 import { buildSearchVariants, buildSearchQuery } from '../../engine/variants.mjs';
@@ -398,6 +398,10 @@ export default function AddView({ onToast }) {
   const [order, setOrder] = useState('default');
   const [queued, setQueued] = useState(new Set());
   const [setModal, setSetModal] = useState(null);
+  const artistReqRef = useRef(0);
+  const setModalReqRef = useRef(0);
+  const closeArtist = () => { artistReqRef.current++; setArtistView(null); };
+  const closeSetModal = () => { setModalReqRef.current++; setSetModal(null); };
   useSyncExternalStore(history.subscribe, history.getSnapshot);
   const entries = history.list();
   const recentProfiles = entries.filter(entry => entry.kind === 'profile');
@@ -438,7 +442,7 @@ export default function AddView({ onToast }) {
   };
 
   const clearFinder = () => {
-    setQuery(''); setResults([]); setSearchState('idle'); setArtistView(null); setPreview(null);
+    setQuery(''); setResults([]); setSearchState('idle'); closeArtist(); setPreview(null);
   };
 
   // One submit, two paths. The box decides which from what was typed.
@@ -530,6 +534,7 @@ export default function AddView({ onToast }) {
 
   const openArtist = async (target) => {
     if (!target || busy) return;
+    const reqId = ++artistReqRef.current;
     setArtistView({
       id: target.id || target.artistId || null,
       name: target.name || target.title || 'Artist',
@@ -541,6 +546,7 @@ export default function AddView({ onToast }) {
     try {
       if (!isElectron) {
         await new Promise((r) => setTimeout(r, 200));
+        if (artistReqRef.current !== reqId) return;
         setArtistView({
           id: '27',
           name: target.name || 'Daft Punk',
@@ -556,6 +562,7 @@ export default function AddView({ onToast }) {
       let artistMeta = null;
       if (!initialId && target.name) {
         const searchRes = await ipc.invoke('http-json', `https://api.deezer.com/search/artist?q=${encodeURIComponent(target.name)}&limit=5`);
+        if (artistReqRef.current !== reqId) return;
         const match = (searchRes?.data || []).find((a) => a.name.toLowerCase() === target.name.toLowerCase()) || searchRes?.data?.[0];
         if (match) {
           artistMeta = match;
@@ -563,6 +570,7 @@ export default function AddView({ onToast }) {
       }
       const artistId = initialId || (artistMeta ? String(artistMeta.id) : null);
       if (!artistId) {
+        if (artistReqRef.current !== reqId) return;
         setArtistView((prev) => ({ ...prev, loading: false, error: 'Could not find artist discography.' }));
         return;
       }
@@ -572,6 +580,7 @@ export default function AddView({ onToast }) {
         ipc.invoke('http-json', `https://api.deezer.com/artist/${artistId}/albums?limit=50`).catch(() => null),
         ipc.invoke('http-json', `https://api.deezer.com/artist/${artistId}/top?limit=15`).catch(() => null),
       ]);
+      if (artistReqRef.current !== reqId) return;
 
       const artistName = infoRes?.name || target.name || 'Artist';
       const artistImage = infoRes?.picture_xl || infoRes?.picture_big || infoRes?.picture_medium || target.image || '';
@@ -617,6 +626,7 @@ export default function AddView({ onToast }) {
         topTracks,
       });
     } catch (error) {
+      if (artistReqRef.current !== reqId) return;
       setArtistView((prev) => ({ ...prev, loading: false, error: error.message || 'Could not load artist.' }));
     }
   };
@@ -968,6 +978,7 @@ export default function AddView({ onToast }) {
 
   const openSet = async (row) => {
     if (!row.mediaUrl && !row.deezerAlbumId && !row.id) return;
+    const reqId = ++setModalReqRef.current;
     setSetModal({ title: row.title, artist: row.artist, image: row.image, loading: true });
     try {
       let out;
@@ -977,6 +988,7 @@ export default function AddView({ onToast }) {
       } else {
         out = await sources.resolve(row.mediaUrl, { mode: 'auto', perTrackArtwork: true });
       }
+      if (setModalReqRef.current !== reqId) return;
       if (out.error) { setSetModal({ title: row.title, artist: row.artist, image: row.image, error: out.error }); return; }
       setSetModal({ title: row.title, artist: row.artist, image: row.image, preview: out });
       if (row.mediaUrl) {
@@ -984,6 +996,7 @@ export default function AddView({ onToast }) {
                    image: out.group?.artworkUrl || row.image || '' });
       }
     } catch (error) {
+      if (setModalReqRef.current !== reqId) return;
       setSetModal({ title: row.title, artist: row.artist, image: row.image, error: error.message || 'Could not read that album.' });
     }
   };
@@ -1068,7 +1081,7 @@ export default function AddView({ onToast }) {
                 {MODES.map((item) => (
                   <button key={item.id} role="tab" aria-selected={mode === item.id}
                     className="seg-btn mode-tab" disabled={!!busy}
-                    onClick={() => { setMode(item.id); setArtistView(null); }}>
+                    onClick={() => { setMode(item.id); closeArtist(); }}>
                     <Icon name={item.icon} size={14} />{item.label}
                   </button>
                 ))}
@@ -1167,7 +1180,7 @@ export default function AddView({ onToast }) {
           {mode === 'search' && artistView && (
             <section className="results-section">
               <div className="artist-hero">
-                <button type="button" className="btn btn-sm btn-ghost" onClick={() => setArtistView(null)}>
+                <button type="button" className="btn btn-sm btn-ghost" onClick={closeArtist}>
                   <Icon name="arrowLeft" size={14} />Back
                 </button>
                 <div className="artist-hero-identity">
@@ -1456,7 +1469,7 @@ export default function AddView({ onToast }) {
         </div>
       </div>
 
-      {setModal && <SetModal state={setModal} busy={busy} onClose={() => setSetModal(null)}
+      {setModal && <SetModal state={setModal} busy={busy} onClose={closeSetModal}
         onOpenArtist={openArtist}
         onQueueAll={() => queueItems(setModal.preview.results.map(setModalItem), setModal.preview.name)}
         onDownloadAllNow={() => queueItems(setModal.preview.results.map(setModalItem), setModal.preview.name, false, { priority: true, preempt: true })}

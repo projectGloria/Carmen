@@ -13,7 +13,10 @@ function installSourceObserver(webRequest, getContext, publish) {
         const mono = page.hostname === 'monochrome.st' && /(^|\.)monochrome\.(st|tf)$/.test(url.hostname);
         const custom = ctx.apiUrl && url.origin === new URL(ctx.apiUrl).origin;
         if (same || lucida || mono || custom) requests.set(details.id, { ctx, host: url.host });
-      } catch { /* not an HTTP source */ }
+        else requests.delete(details.id);
+      } catch { requests.delete(details.id); }
+    } else {
+      requests.delete(details.id);
     }
     callback({});
   });

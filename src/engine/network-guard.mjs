@@ -5,10 +5,19 @@ export const PRIVATE_HOST = /^(localhost$|127\.|10\.|192\.168\.|169\.254\.|172\.
 
 export function isPrivateIp(ip) {
   if (!ip || typeof ip !== 'string') return true;
-  let target = ip.trim();
-  if (target.startsWith('::ffff:')) {
-    const v4 = target.slice(7);
-    if (net.isIPv4(v4)) target = v4;
+  let target = ip.trim().replace(/^\[|\]$/g, '');
+  const lower = target.toLowerCase();
+  if (lower.startsWith('::ffff:')) {
+    const tail = lower.slice(7);
+    if (net.isIPv4(tail)) {
+      target = tail;
+    } else {
+      const hex = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(tail);
+      if (hex) {
+        const hi = parseInt(hex[1], 16), lo = parseInt(hex[2], 16);
+        target = `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+      }
+    }
   }
   if (net.isIPv4(target)) {
     const parts = target.split('.').map(Number);
@@ -41,12 +50,13 @@ export function isPrivateIp(ip) {
 
 export async function isSafePublicHost(hostname, lookupFn = dns.lookup) {
   if (!hostname || typeof hostname !== 'string') return false;
-  if (PRIVATE_HOST.test(hostname)) return false;
-  if (net.isIP(hostname)) {
-    return !isPrivateIp(hostname);
+  const host = hostname.trim().replace(/^\[|\]$/g, '');
+  if (PRIVATE_HOST.test(host)) return false;
+  if (net.isIP(host)) {
+    return !isPrivateIp(host);
   }
   try {
-    const result = await lookupFn(hostname, { all: true });
+    const result = await lookupFn(host, { all: true });
     const addresses = Array.isArray(result) ? result : [result];
     if (!addresses.length) return false;
     for (const entry of addresses) {

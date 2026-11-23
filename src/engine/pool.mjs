@@ -136,6 +136,24 @@ export class Pool {
     return this.queue.length < before || !!running;
   }
 
+  /** Batch-cancel many ids in a single queue pass and one _pump() call. */
+  cancelMany(ids) {
+    const set = ids instanceof Set ? ids : new Set(ids);
+    if (!set.size) return 0;
+    const before = this.queue.length;
+    this.queue = this.queue.filter((it) => !set.has(it.id));
+    let aborted = 0;
+    for (const id of set) {
+      const running = this.active.get(id);
+      if (running) {
+        aborted++;
+        try { running.controller.abort(); } catch (e) { /* already settled */ }
+      }
+    }
+    this._pump();
+    return (before - this.queue.length) + aborted;
+  }
+
   cancelAll() {
     this.queue = [];
     for (const { controller } of this.active.values()) {

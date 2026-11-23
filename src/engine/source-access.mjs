@@ -44,6 +44,7 @@ export class SourceAccess {
     this.cooldowns = { ...cooldowns };
     this.states = new Map();
     this.cache = new Map();
+    this.monochromeEndpoint = '';
   }
 
   key(step) { return ['monochrome', 'hifi-tidal'].includes(step.source) ? 'monochrome' : step.source === 'squid-qobuz' ? 'squid-qobuz' : 'lucida'; }

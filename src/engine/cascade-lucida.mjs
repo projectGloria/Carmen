@@ -154,15 +154,20 @@ ${injectableScorer(expected, opts.minTitleScore ?? MIN_TITLE_SCORE)}
             /^(download|download track)$/i.test((el.innerText || el.textContent || '').trim()));
         };
         if (rows.length) {
+          let hasPlayableControl = false;
           for (const row of rows) {
             const titleEl = row.querySelector('.title, .track-title, .track-name, h1');
             const title = titleOf(titleEl);
             const artistEl = row.querySelector('.artist, .track-artist, h2');
             const artist = artistEl ? (artistEl.innerText || '').trim() : artistText || EXPECTED.artist;
             const button = controlIn(row);
+            if (title && button) hasPlayableControl = true;
             if (!title || !button || !isAcceptable(score(title, artist, durationOf(row.querySelector('.duration, .track-duration'))), MIN_TITLE_SCORE)) continue;
             button.click(); resolve({ outcome: 'clicked-track', label: title + ' - ' + artist }); return true;
           }
+          // Rows exist (e.g. table header or hydrating list) but no row has a
+          // title and download button yet; keep polling instead of failing early.
+          if (!hasPlayableControl) return false;
           // Never fall through to an album or a different track's control.
           resolve({ outcome: 'no-match', label: 'No matching release track' }); return true;
         }

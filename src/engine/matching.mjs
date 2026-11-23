@@ -52,6 +52,7 @@ export const FOLD = {
 export function normWith(s, FOLD_) {
   return String(s || '')
     .normalize('NFKD').replace(/(\p{Script=Latin})\p{M}+/gu, '$1').normalize('NFC')
+    .replace(/['’‘]/g, '')
     .toLowerCase().replace(/[^\p{L}\p{M}\p{N}\s]|[łøđðþæœßıħŋŧĸ]/gu, (c) => FOLD_[c] || ' ')
     .replace(/\s+/g, ' ').trim();
 }
@@ -69,13 +70,14 @@ export function toksWith(s, FOLD_, STOP_, norm_) {
  *   credited artist name matched.
  */
 export function scoreWith(expected, candTitle, candArtist, K, candDurationSec = 0) {
-  const featParen = /\s*[([]\s*(?:feat\.?|featuring|with)\b([^)[\]]*)[)\]]/i;
+  const featParen = /\s*[([]\s*(?:feat\.?|ft\.?|featuring|with)\b([^)[\]]*)[)\]]/i;
   const featMatch = featParen.exec((expected && expected.title) || '');
   const cleanTitle = ((expected && expected.title) || '').replace(featParen, '').trim();
   const credits = String(expected?.artist || '').split(/(?:[,&;]|\s+[/x]\s+|\s+(?:feat\.?|ft\.?|featuring|with|vs\.?)\s+)/i)
     .map(one => K.norm(one, K.FOLD)).filter(Boolean);
   const recordingTitle = (s) => String(s || '')
     .replace(/\s*[([]\s*(?:feat\.?|ft\.?|featuring|with)\b[^)[\]]*[)\]]/gi, '')
+    .replace(/\s+(?:feat\.?|ft\.?|featuring)\s+[^([\]]+$/i, '')
     .replace(/\s*[([]([^)[\]]*)[)\]]/g, (whole, label) => {
       const flat = K.norm(label, K.FOLD);
       return /^(original mix|album version|original version|deluxe edition)$/.test(flat) || credits.includes(flat) ? '' : whole;

@@ -28,7 +28,7 @@ export async function loadValidatedLibrary(profileDir, validateFile) {
   const mem = memoryLibraries.get(dirKey(profileDir));
   const state = mem ? structuredClone(mem) : disk;
   if (mem && disk?.tracks && Object.keys(disk.tracks).length) {
-    state.tracks = { ...state.tracks, ...disk.tracks };
+    state.tracks = { ...disk.tracks, ...state.tracks };
   }
   const tracks = Object.entries(state.tracks);
   for (let start = 0; start < tracks.length; start += 8) {
@@ -102,6 +102,12 @@ export async function syncProfileLibrary(profileDir, snapshot, { validateFile, s
       let list = playlistsForKey.get(key);
       if (!list) { list = []; playlistsForKey.set(key, list); }
       if (!list.some(p => (p.folder || p.file) === plFolder)) list.push(playlist);
+    }
+  }
+
+  for (const [key, track] of Object.entries(state.tracks || {})) {
+    if (downloaded(track) && track.savePath && !claimed.has(track.savePath.toLowerCase())) {
+      claimed.set(track.savePath.toLowerCase(), key);
     }
   }
 

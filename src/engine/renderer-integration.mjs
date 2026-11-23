@@ -83,6 +83,7 @@ export function startEngine(opts) {
     keepTrying,
     awaitTransfer: (itemId, signal) => tracker.await(itemId, signal),
     cancelTransfer: (itemId) => ipc.cancelDownload(itemId),
+    onTransferFailed: (item, step) => access.cache.delete(access.cacheKey(item, step)),
     checkExisting: typeof ipcRenderer.invoke === 'function'
       ? (item) => ipcRenderer.invoke('downloads-check', [{
         key: item.key, folderName: item.folderName, title: item.title,
@@ -157,8 +158,8 @@ export function startEngine(opts) {
     lastReportedTerminalVersion = controller._terminalVersion;
     for (const id of reported.keys()) if (!controller.getItem(id)) reported.delete(id);
     if (controller.stats.skipped === 0) return;
-    for (const rec of controller.getItems()) {
-      if (rec.status !== 'skipped' || reported.get(rec.item.id) === rec.tried) continue;
+    const reportOne = (rec) => {
+      if (rec.status !== 'skipped' || reported.get(rec.item.id) === rec.tried) return;
       reported.set(rec.item.id, rec.tried);
       ipcRenderer.send('report-track', {
         section: 'missing',
@@ -172,7 +173,9 @@ export function startEngine(opts) {
           tried: rec.tried,
         },
       });
-    }
+    };
+    for (const rec of controller.items.values()) reportOne(rec);
+    for (const rec of controller.tracks.values()) reportOne(rec);
   }));
 
   // The other half of that record, one level up: when every track a profile
@@ -482,11 +485,15 @@ export function attachPersistence(controller, ipcRenderer, log = () => {}) {
     let snap;
     try {
       snap = normalizeQueueSnapshot(await ipcRenderer.invoke('queue-load').catch(() => null));
-      if (!snap.items.length && !snap.tracks.length) return { restored: 0, resumed: 0, alreadyDone: 0, staySkipped: 0 };
+      if (!snap.items.length && !snap.tracks.length) {
+        await ipcRenderer.invoke('transfers-resumable', []).catch(() => []);
+        return { restored: 0, resumed: 0, alreadyDone: 0, staySkipped: 0 };
+      }
       controller.pause();
-      const resumable = await ipcRenderer.invoke('transfers-resumable').catch(() => []) || [];
-      const byId = new Map(resumable.map(t => [t.itemId, t]));
       const all = [...snap.items, ...snap.tracks];
+      const adoptableIds = all.filter(i => i.status !== 'cancelled').map(i => i.id);
+      const resumable = await ipcRenderer.invoke('transfers-resumable', adoptableIds).catch(() => []) || [];
+      const byId = new Map(resumable.map(t => [t.itemId, t]));
       const checks = await ipcRenderer.invoke('downloads-check', all.map(i => ({
         key: i.key, folderName: i.folderName, title: i.title, artist: i.artist, durationSec: i.durationSec, isrc: i.isrc, savePath: i.savePath, bytes: i.bytes,
       })), { restore: true }).catch(() => []) || [];

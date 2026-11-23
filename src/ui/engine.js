@@ -80,42 +80,50 @@ async function initializeEngine({ config, log }) {
 function makeScraper() {
   const view = typeof document !== 'undefined' && document.getElementById('scraper-view');
   if (!view) return null;
+  // Serialize scrapes onto the single #scraper-view element so concurrent callers
+  // cannot overwrite src/useragent or reset the page mid-execution.
+  let queue = Promise.resolve();
+  const runOnce = (url, script, userAgent) => {
+    // Spotify serves a different, playlist-less page to Electron's default
+    // user agent, which is why the profile grid came back empty. The old
+    // implementation set a desktop UA here and the port dropped it.
+    if (userAgent) view.setAttribute('useragent', userAgent);
+    else view.removeAttribute('useragent');
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const done = (fn, arg) => {
+        if (settled) return;
+        settled = true;
+        view.removeEventListener('dom-ready', onReady);
+        view.removeEventListener('did-fail-load', onFail);
+        clearTimeout(timer);
+        // Unload the page. Webviews run with backgroundThrottling off and are
+        // rendered (opacity .001), so open.spotify.com left in here kept its
+        // whole SPA running at full rate for the rest of the session. The
+        // workers reset after every attempt; this view never did.
+        view.setAttribute('src', 'about:blank');
+        fn(arg);
+      };
+      const onReady = async () => {
+        let current = '';
+        try { current = view.getURL(); } catch (e) { /* not attached yet */ }
+        if (!current || current === 'about:blank') return;
+        try { done(resolve, await view.executeJavaScript(script)); }
+        catch (e) { done(reject, e); }
+      };
+      const onFail = (e) => { if (e.isMainFrame) done(reject, new Error(e.errorDescription || 'load failed')); };
+      const timer = setTimeout(() => done(reject, new Error('page load timed out')), 90000);
+      view.addEventListener('dom-ready', onReady);
+      view.addEventListener('did-fail-load', onFail);
+      if (view.getAttribute('src') === url) view.reload();
+      else view.setAttribute('src', url);
+    });
+  };
   return {
     run(url, script, userAgent) {
-      // Spotify serves a different, playlist-less page to Electron's default
-      // user agent, which is why the profile grid came back empty. The old
-      // implementation set a desktop UA here and the port dropped it.
-      if (userAgent) view.setAttribute('useragent', userAgent);
-      else view.removeAttribute('useragent');
-      return new Promise((resolve, reject) => {
-        let settled = false;
-        const done = (fn, arg) => {
-          if (settled) return;
-          settled = true;
-          view.removeEventListener('dom-ready', onReady);
-          view.removeEventListener('did-fail-load', onFail);
-          clearTimeout(timer);
-          // Unload the page. Webviews run with backgroundThrottling off and are
-          // rendered (opacity .001), so open.spotify.com left in here kept its
-          // whole SPA running at full rate for the rest of the session. The
-          // workers reset after every attempt; this view never did.
-          view.setAttribute('src', 'about:blank');
-          fn(arg);
-        };
-        const onReady = async () => {
-          let current = '';
-          try { current = view.getURL(); } catch (e) { /* not attached yet */ }
-          if (!current || current === 'about:blank') return;
-          try { done(resolve, await view.executeJavaScript(script)); }
-          catch (e) { done(reject, e); }
-        };
-        const onFail = (e) => { if (e.isMainFrame) done(reject, new Error(e.errorDescription || 'load failed')); };
-        const timer = setTimeout(() => done(reject, new Error('page load timed out')), 90000);
-        view.addEventListener('dom-ready', onReady);
-        view.addEventListener('did-fail-load', onFail);
-        if (view.getAttribute('src') === url) view.reload();
-        else view.setAttribute('src', url);
-      });
+      const next = queue.then(() => runOnce(url, script, userAgent), () => runOnce(url, script, userAgent));
+      queue = next.catch(() => {});
+      return next;
     },
   };
 }

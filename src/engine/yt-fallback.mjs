@@ -34,10 +34,12 @@ export function cleanYouTubeTitle(raw) {
 // count as unmatched tokens against the expected title and depress precision,
 // so offer both readings and keep whichever scores better.
 function titleReadings(cleaned) {
-  const out = [cleaned];
+  const out = [{ title: cleaned, artistPart: null }];
   const dash = cleaned.split(/\s+[-–—]\s+/);
-  if (dash.length === 2) out.push(dash[1], dash[0]);
-  return out.filter(Boolean);
+  if (dash.length === 2 && dash[0] && dash[1]) {
+    out.push({ title: dash[1], artistPart: dash[0] }, { title: dash[0], artistPart: dash[1] });
+  }
+  return out;
 }
 
 const DEFAULT_MAX_DRIFT = 20; // seconds
@@ -60,7 +62,10 @@ export function rankYouTube(expected, candidates, opts = {}) {
       // then keep the best - the artist may be in either field.
       const better = (s, b) => (s.a - b.a) || (s.t - b.t) || (s.p - b.p);
       let best = { t: 0, p: 0, a: 0 };
-      for (const reading of titleReadings(cleaned)) {
+      for (const { title: reading, artistPart } of titleReadings(cleaned)) {
+        // Only split "A - B" when the discarded half actually names the artist,
+        // so a self-titled track ("Black Sabbath") cannot match "Black Sabbath - Paranoid".
+        if (artistPart && expected.artist && score(expected, '', artistPart).a !== 1) continue;
         const s = score(expected, reading, `${c.uploader || ''} ${cleaned}`);
         if (better(s, best) > 0) best = s;
       }

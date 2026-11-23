@@ -36,7 +36,17 @@ function useTransferRates(active) {
   const activeRef = useRef(active);
   const samples = useRef(new Map());
 
-  useEffect(() => { activeRef.current = active; }, [active]);
+  useEffect(() => {
+    activeRef.current = active;
+    const live = new Set(active.filter((r) => r.status === 'downloading').map((r) => r.item.id));
+    let changed = false;
+    for (const id of [...samples.current.keys()]) {
+      if (!live.has(id)) { samples.current.delete(id); changed = true; }
+    }
+    if (changed) {
+      setRates(new Map([...samples.current].map(([id, s]) => [id, s.speed])));
+    }
+  }, [active]);
 
   useEffect(() => {
     const store = getController();
@@ -46,9 +56,9 @@ function useTransferRates(active) {
       let changed = false;
       const live = new Set();
       for (const rec of activeRef.current) {
+        if (rec.status !== 'downloading') continue;
         const id = rec.item.id;
         live.add(id);
-        if (rec.status !== 'downloading') continue;
         const got = rec.receivedBytes || 0;
         const prev = samples.current.get(id);
         if (!prev) { samples.current.set(id, { bytes: got, at: now, speed: null }); continue; }

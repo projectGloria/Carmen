@@ -14,6 +14,12 @@ export function createSpotifyMetadata({ fetch: fetchPage, cache, log = () => {},
   intervalMs = SPOTIFY_REQUEST_INTERVAL_MS, concurrency = SPOTIFY_REQUEST_CONCURRENCY,
 } = {}) {
   const memory = new Map(), pending = new Map(), queue = [];
+  const MAX_MEMORY_ENTRIES = 1000;
+  const remember = (k, record) => {
+    memory.delete(k);
+    memory.set(k, record);
+    while (memory.size > MAX_MEMORY_ENTRIES) memory.delete(memory.keys().next().value);
+  };
   let active = 0, nextStart = 0, cooldown = 0, failedUntil = 0;
   let launch = Promise.resolve();
   const rateLimitError = () => new Error(`Spotify is temporarily limiting requests. Try again in ${Math.max(1, Math.ceil((Math.max(cooldown, failedUntil) - now()) / 1000))} seconds.`);
@@ -89,11 +95,11 @@ export function createSpotifyMetadata({ fetch: fetchPage, cache, log = () => {},
     const work = (async () => {
       let stored;
       try { stored = await cache?.get?.(key); } catch { /* cache failure does not prevent an import */ }
-      if (valid(stored)) { memory.set(embedUrl, stored); return stored.data; }
+      if (valid(stored)) { remember(embedUrl, stored); return stored.data; }
       const data = await schedule(() => fetchData(embedUrl), path.startsWith('track/') ? 1 : 0);
       if (data) {
         const record = { at: now(), data };
-        memory.set(embedUrl, record);
+        remember(embedUrl, record);
         try { await cache?.set?.(key, record); } catch { /* retain the successful read */ }
       }
       return data;

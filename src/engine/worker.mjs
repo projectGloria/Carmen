@@ -105,6 +105,7 @@ export class Worker {
     // a finished attempt" - still holds for anyone who wants it.
     this.pipeline = !!deps.pipeline;
     this.t = { ...DEFAULTS, ...(deps.timeouts || {}) };
+    this._configuredEndpoint = '';
   }
 
   /**
@@ -235,7 +236,7 @@ export class Worker {
       itemId: item.id,
       folderName: item.folderName,
       artworkUrl: item.groupArtwork,
-      trackArtworkUrl: item.image || null,
+      trackArtworkUrl: item.artworkPending ? null : (item.image || null),
       key: item.key,
       title: item.title,
       artist: item.artist,
@@ -357,6 +358,8 @@ export class Worker {
           if (Array.isArray(outcome.alternates)) alternates = outcome.alternates.slice();
           if (outcome.url) {
             await this.access?.pace(this.access.key(step), signal, (ms, limited) => this.onWait(item.id, step, ms, limited));
+            ready.cancel();
+            ready = this._nextDomReady();
             this.view.navigate(outcome.url);
           }
           continue;

@@ -164,10 +164,25 @@ export class DownloadTracker {
       sw.resolve({ itemId });
     }
     const w = this.waiters.get(itemId);
-    if (!w) { this._holdEarly(itemId, value); return; } // held until await() asks
+    if (!w) {
+      // A cancelled transfer settling after its waiter was already aborted must
+      // not sit in `early` and poison the next attempt for this itemId.
+      if (value?.status !== 'cancelled') this._holdEarly(itemId, value);
+      return;
+    }
     this.waiters.delete(itemId);
     if (w.timer) clearTimeout(w.timer);
     w.resolve(value);
+  }
+
+  /** Drop stale per-item state before a fresh attempt or after cancellation. */
+  reset(itemId) {
+    if (!itemId) return;
+    this.early.delete(itemId);
+    this.started.delete(itemId);
+    for (const [file, id] of this.byFile) {
+      if (id === itemId) this.byFile.delete(file);
+    }
   }
 
   /**
@@ -253,7 +268,10 @@ export function ipcAdapter(ipcRenderer, tracker) {
       try { return await ipcRenderer.invoke('provider-request', { id, operation, args, requestId }); }
       finally { signal?.removeEventListener('abort', abort); }
     },
-    startProviderDownload: payload => ipcRenderer.invoke('provider-download', payload),
+    startProviderDownload: payload => {
+      if (payload?.itemId) tracker.reset(payload.itemId);
+      return ipcRenderer.invoke('provider-download', payload);
+    },
     onSourceResponse(webContentsId, itemId, cb) {
       const handler = (_event, response) => {
         if (response?.webContentsId === webContentsId && response.itemId === itemId) cb(response);
@@ -261,11 +279,17 @@ export function ipcAdapter(ipcRenderer, tracker) {
       ipcRenderer.on('source-response', handler);
       return () => ipcRenderer.removeListener('source-response', handler);
     },
-    setDownloadContext(ctx) { ipcRenderer.send('set-next-download-folder', ctx); },
+    setDownloadContext(ctx) {
+      if (ctx?.itemId) tracker.reset(ctx.itemId);
+      ipcRenderer.send('set-next-download-folder', ctx);
+    },
     clearDownloadContext(id) { ipcRenderer.send('clear-download-context', id); },
     awaitDownload(itemId, signal) { return tracker.await(itemId, signal); },
     awaitDownloadStart(itemId, signal) { return tracker.awaitStart(itemId, signal); },
-    cancelDownload(itemId) { ipcRenderer.send('download-cancel-item', itemId); },
+    cancelDownload(itemId) {
+      tracker.reset(itemId);
+      ipcRenderer.send('download-cancel-item', itemId);
+    },
     listResumableTransfers() { return ipcRenderer.invoke('transfers-resumable'); },
     resumeTransfer(itemId) { return ipcRenderer.invoke('transfer-resume', itemId); },
   };

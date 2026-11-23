@@ -1,0 +1,8 @@
+id = "carmen"
+name = "Carmen"
+version = "1.1.0"
+main_exe = "Carmen.exe"
+icon = "build/icon.ico"
+accent = "#a78bfa"
+description = "Fast, automated lossless FLAC audio fetcher and music library organizer for Windows with multi-source cascade scrapers, Vorbis tagging, and M3U8 export."
+data_folders = ["%APPDATA%\\Carmen"]

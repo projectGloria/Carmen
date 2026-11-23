@@ -9,13 +9,14 @@ export default function VirtualRows({ records, children, id }) {
   const [height, setHeight] = useState(48);
   const [focused, setFocused] = useState(null);
   const key = rec => rec.id || rec.item.id;
+  const count = records.length;
   useLayoutEffect(() => {
     const element = root.current, pane = element.closest('.pane') || element.parentElement;
     let frame;
     const measure = () => {
       const h = parseFloat(getComputedStyle(element).getPropertyValue('--row-h')) || 48;
       setHeight(h);
-      const next = visibleRange(records.length, element.getBoundingClientRect().top - pane.getBoundingClientRect().top, pane.clientHeight, h);
+      const next = visibleRange(count, element.getBoundingClientRect().top - pane.getBoundingClientRect().top, pane.clientHeight, h);
       setRange(old => old.start === next.start && old.end === next.end ? old : next);
     };
     const schedule = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(measure); };
@@ -24,7 +25,7 @@ export default function VirtualRows({ records, children, id }) {
     pane.addEventListener('scroll', schedule, { passive: true });
     window.addEventListener('resize', schedule); measure();
     return () => { cancelAnimationFrame(frame); observer.disconnect(); pane.removeEventListener('scroll', schedule); window.removeEventListener('resize', schedule); };
-  }, [records]);
+  }, [count]);
   const indices = Array.from({ length: Math.max(0, range.end - range.start) }, (_, n) => range.start + n);
   const focusIndex = focused == null ? -1 : records.findIndex(rec => key(rec) === focused);
   if (focusIndex >= 0 && !indices.includes(focusIndex)) indices.push(focusIndex);

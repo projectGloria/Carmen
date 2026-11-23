@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useProfileTree, useStats, useQueueOrder, getController } from '../engine.js';
 import TrackRow from '../components/TrackRow.jsx';
 import VirtualRows from '../components/VirtualRows.jsx';
@@ -204,11 +204,11 @@ export default function QueueView({ onToast, preferences = {}, onPreferencesChan
 // Queue-order layout: the exact pool execution order, with drag-and-drop.
 function CustomQueuePanel({ orderData, filter, onToast }) {
   const c = getController();
-  const [dragFromId, setDragFromId] = useState(null);
+  const dragFromRef = useRef(null);
   const [dragTargetId, setDragTargetId] = useState(null);
 
   const handleDragStart = useCallback((e, id) => {
-    setDragFromId(id);
+    dragFromRef.current = id;
     try {
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('text/plain', id);
@@ -217,18 +217,18 @@ function CustomQueuePanel({ orderData, filter, onToast }) {
 
   const handleDragOver = useCallback((e, id) => {
     e.preventDefault();
-    if (id !== dragTargetId) setDragTargetId(id);
-  }, [dragTargetId]);
+    setDragTargetId((prev) => (prev === id ? prev : id));
+  }, []);
 
   const handleDrop = useCallback((e, targetId) => {
     e.preventDefault();
-    const fromId = dragFromId || (e.dataTransfer && e.dataTransfer.getData('text/plain'));
-    setDragFromId(null);
+    const fromId = dragFromRef.current || (e.dataTransfer && e.dataTransfer.getData('text/plain'));
+    dragFromRef.current = null;
     setDragTargetId(null);
     if (fromId && targetId && fromId !== targetId) {
       c.reorderItem?.(fromId, targetId);
     }
-  }, [c, dragFromId]);
+  }, [c]);
 
   const activeList = orderData.active || [];
   const queuedList = orderData.queued || [];
@@ -242,7 +242,7 @@ function CustomQueuePanel({ orderData, filter, onToast }) {
 
   const showActive = filter === 'all' || filter === 'active';
   const showQueued = filter === 'all' || filter === 'active';
-  const showPaused = filter === 'all' || filter === 'paused' || filter === 'active';
+  const showPaused = filter === 'all' || filter === 'paused';
   const showRest = filter === 'all' || filter === 'done' || filter === 'missing';
 
   return (

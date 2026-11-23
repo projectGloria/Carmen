@@ -100,6 +100,7 @@ export class Controller {
     // worker is no longer waiting for it.
     this.awaitTransfer = opts.awaitTransfer || null;
     this.cancelTransfer = opts.cancelTransfer || null;
+    this.onTransferFailed = opts.onTransferFailed || null;
     this.checkExisting = opts.checkExisting || null;
     // How many transfers may run DETACHED from a slot. Past this, a chain waits
     // for its own file inline, which both bounds the transfers in flight and
@@ -122,6 +123,7 @@ export class Controller {
     this.tracks = new Map(); // trackKey -> trackRecord
     this.playlists = new Map(); // playlistId -> { id, name, file, trackKeys: [], profileId }
     this.profiles = new Map(); // profileId -> profileMeta
+    this._playlistItemCaches = new WeakMap(); // playlist obj -> Map<trackKey, { stamp, base, value }>
     this._listeners = new Set();
     this._itemListeners = new Map(); // canonicalId -> Set<fn>
     this._version = 0;
@@ -226,12 +228,13 @@ export class Controller {
       const resolvedFolderName = (pl.folderName && !/\/Playlists$/i.test(pl.folderName) && pl.folderName !== 'Playlists')
         ? pl.folderName
         : defaultPlFolder;
-      if (!pl._itemCache) pl._itemCache = new Map();
+      let plCache = this._playlistItemCaches.get(pl);
+      if (!plCache) { plCache = new Map(); this._playlistItemCaches.set(pl, plCache); }
       (pl.trackKeys || []).forEach((key, index) => {
         const track = this.tracks.get(key);
         if (!track) return;
         const itemStamp = `${track.item.image || ''}\0${pl.artwork || ''}\0${prof?.image || ''}\0${resolvedFolderName}`;
-        let cachedItem = pl._itemCache.get(key);
+        let cachedItem = plCache.get(key);
         if (!cachedItem || cachedItem.stamp !== itemStamp || cachedItem.base !== track.item) {
           cachedItem = {
             stamp: itemStamp,
@@ -249,7 +252,7 @@ export class Controller {
               profileFolder: prof?.folderName,
             },
           };
-          pl._itemCache.set(key, cachedItem);
+          plCache.set(key, cachedItem);
         }
         derived.push({
           id: `${pl.id}::${index}::${key}`,
@@ -455,8 +458,6 @@ export class Controller {
     if (statusText !== undefined) rec.statusText = statusText;
     if (this._isTerminal(status) || this._isTerminal(prevStatus)) {
       this._terminalVersion++;
-      this._libraryVersion++;
-    } else if (status !== SEARCHING || prevStatus !== SEARCHING) {
       this._libraryVersion++;
     }
     this._emit(rec);
@@ -805,7 +806,7 @@ export class Controller {
       if (preempted >= count) break;
       if (excludeIds.has(run.item.id)) continue;
       const victimRec = this._getRecord(run.item.id);
-      if (!victimRec) continue;
+      if (!victimRec || victimRec.status === READY || victimRec.status === DOWNLOADING) continue;
       victimRec._preempted = true;
       if (victimRec.step && victimRec.step.index != null) {
         victimRec.resumeIndex = victimRec.step.index;
@@ -1057,6 +1058,7 @@ export class Controller {
   /** Pause all active and queued tracks in a playlist/group. */
   pauseGroup(groupId) {
     const recs = this._groupRecords(groupId);
+    const toCancel = [];
     let count = 0;
     for (const rec of recs) {
       if (rec.status === QUEUED || rec.status === SEARCHING || rec.status === READY || rec.status === DOWNLOADING) {
@@ -1065,11 +1067,12 @@ export class Controller {
         rec._preempted = false;
         rec.status = PAUSED;
         rec.statusText = 'Paused';
-        this.pool.cancel(targetId);
+        toCancel.push(targetId);
         this._abortTransfer(targetId);
         count++;
       }
     }
+    if (toCancel.length) this.pool.cancelMany(toCancel);
     if (count) this._emit();
     return count;
   }
@@ -1206,6 +1209,7 @@ export class Controller {
    */
   remove(ids) {
     const list = Array.isArray(ids) ? ids : [ids];
+    const toCancel = [];
     let removed = 0;
     for (const id of list) {
       // Check if derived playlist item: plId::index::key
@@ -1222,6 +1226,7 @@ export class Controller {
             const kIdx = pl.trackKeys.indexOf(key);
             if (kIdx !== -1) pl.trackKeys.splice(kIdx, 1);
           }
+          this._playlistItemCaches.get(pl)?.delete(key);
           // Check refcount across remaining playlists
           let refcount = 0;
           for (const otherPl of this.playlists.values()) {
@@ -1230,7 +1235,7 @@ export class Controller {
           if (refcount === 0) {
             const trackRec = this.tracks.get(key);
             if (trackRec && !this._isTerminal(trackRec.status)) {
-              this.pool.cancel(key);
+              toCancel.push(key);
               this._abortTransfer(key);
             }
             this.tracks.delete(key);
@@ -1243,7 +1248,7 @@ export class Controller {
       if (this.tracks.has(id)) {
         const rec = this.tracks.get(id);
         if (!this._isTerminal(rec.status)) {
-          this.pool.cancel(id);
+          toCancel.push(id);
           this._abortTransfer(id);
         }
         this.tracks.delete(id);
@@ -1256,12 +1261,13 @@ export class Controller {
       // Cancel first: an in-flight chain holds a pool slot and a webview, and
       // dropping the record without cancelling would leave both working on a
       // track nothing is left to receive.
-      if (!this._isTerminal(rec.status)) { this.pool.cancel(id); this._abortTransfer(id); }
+      if (!this._isTerminal(rec.status)) { toCancel.push(id); this._abortTransfer(id); }
       this.items.delete(id);
       const key = identityKey(rec.item);
       if (key && this.keys.get(key) === id) this.keys.delete(key);
       removed++;
     }
+    if (toCancel.length) this.pool.cancelMany(toCancel);
     if (removed) this._emit();
     return removed;
   }
@@ -1277,18 +1283,20 @@ export class Controller {
           remainingKeys.add(k);
         }
       }
+      const toCancel = [];
       for (const key of (removedPl.trackKeys || [])) {
         if (!remainingKeys.has(key)) {
           const trackRec = this.tracks.get(key);
           if (trackRec) {
             if (!this._isTerminal(trackRec.status)) {
-              this.pool.cancel(key);
+              toCancel.push(key);
               this._abortTransfer(key);
             }
             this.tracks.delete(key);
           }
         }
       }
+      if (toCancel.length) this.pool.cancelMany(toCancel);
       this._emit();
       return (removedPl.trackKeys || []).length;
     }
@@ -1311,12 +1319,14 @@ export class Controller {
       for (const key of pl.trackKeys || []) removedKeys.add(key);
     }
     const remaining = new Set([...this.playlists.values()].flatMap(pl => pl.trackKeys || []));
+    const toCancel = [];
     for (const key of removedKeys) {
       if (remaining.has(key)) continue;
       const rec = this.tracks.get(key);
-      if (rec && !this._isTerminal(rec.status)) { this.pool.cancel(key); this._abortTransfer(key); }
+      if (rec && !this._isTerminal(rec.status)) { toCancel.push(key); this._abortTransfer(key); }
       this.tracks.delete(key);
     }
+    if (toCancel.length) this.pool.cancelMany(toCancel);
     const looseIds = [...this.items.values()].filter(rec => rec.item.profileId === profileId).map(rec => rec.item.id);
     // remove() emits once for all loose tracks; otherwise emit once here.
     removed += this.remove(looseIds);
@@ -1516,6 +1526,7 @@ export class Controller {
         return;
       }
 
+      this.onTransferFailed?.(item, step);
       const next = advanceAfter(rec.plan, step.index, res.outcome);
       rec.resumeIndex = next;
       this._set(rec, QUEUED, describeOutcome(res.outcome, {
@@ -1703,6 +1714,7 @@ export class Controller {
           return;
         }
         res = transferResult(done);
+        if (res.outcome !== 'completed') this.onTransferFailed?.(item, step);
       }
 
       rec.tried.push({
@@ -1723,7 +1735,7 @@ export class Controller {
       } else if (UNAVAILABLE_OUTCOMES.has(res.outcome)) {
         this.markServiceUnhealthy(step.service);
         this.log('service.unhealthy', { service: step.service, outcome: res.outcome });
-      } else {
+      } else if (res.outcome !== 'rate-limited') {
         this.markServiceHealthy(step.service);
       }
 

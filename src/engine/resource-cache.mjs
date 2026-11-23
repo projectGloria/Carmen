@@ -17,7 +17,10 @@ export function resourceCache(load, { concurrency = 4, maxEntries = 64, ttl = 60
           }
         }
         return value;
-      }).then(resolve, reject).finally(() => { active--; pending.delete(key); pump(); });
+      }).then(
+        value => { active--; pending.delete(key); pump(); resolve(value); },
+        error => { active--; pending.delete(key); pump(); reject(error); },
+      );
     }
   };
   return key => {

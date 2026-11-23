@@ -296,6 +296,7 @@ export function createSources({ fetch: doFetch, httpJson, catalogRead, scraper, 
       });
     });
     trackArtwork.set(trackId, pending);
+    while (trackArtwork.size > 4000) trackArtwork.delete(trackArtwork.keys().next().value);
     pumpArtwork();
     return pending;
   }
