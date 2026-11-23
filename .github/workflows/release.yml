@@ -97,7 +97,7 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ needs.version.outputs.version }}"
-          npx --yes gloria-setup@0.1.1 --app release/win-unpacked --manifest gloria.toml --version $version --out dist
+          npx --yes gloria-setup@0.2.4 --app release/win-unpacked --manifest gloria.toml --version $version --out dist
 
       - name: Dry-run verify installer
         shell: pwsh
