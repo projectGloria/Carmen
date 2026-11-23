@@ -146,14 +146,16 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           VERSION: ${{ needs.version.outputs.version }}
           PRERELEASE: ${{ needs.version.outputs.prerelease }}
+          TARGET_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           TAG="v${VERSION}"
           INSTALLER="Carmen_${VERSION}_x64-setup.exe"
 
-          ARGS=(--draft --title "Carmen ${TAG}" --generate-notes)
+          ARGS=(--draft --target "$TARGET_SHA" --title "Carmen ${TAG}" --generate-notes)
           if [ "$PRERELEASE" = "true" ]; then
             ARGS+=(--prerelease)
           fi
